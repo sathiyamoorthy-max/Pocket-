@@ -48,8 +48,23 @@ def get_m3u8_url(episode_url, session):
 
 def process_m3u8(m3u8_url, session):
     try:
+        logger.info(f"Loading M3U8 playlist: {m3u8_url}")
         playlist = m3u8.load(m3u8_url)
         base_url = '/'.join(m3u8_url.split('/')[:-1])
+        
+        # --- NEW LOGIC: Master Playlist-ஐ கையாளுதல் ---
+        # ஆடியோ துண்டுகள் இல்லை, ஆனால் வேறு பிளேலிஸ்ட்கள் இருந்தால்...
+        if not playlist.segments and playlist.playlists:
+            logger.info("Master playlist detected! Extracting the actual audio playlist...")
+            # முதல் குவாலிட்டி லிங்க்கை எடுக்கிறோம்
+            child_uri = playlist.playlists[0].uri
+            child_url = child_uri if child_uri.startswith('http') else f"{base_url}/{child_uri}"
+            logger.info(f"Loading child M3U8: {child_url}")
+            
+            # உண்மையான ஆடியோ பிளேலிஸ்ட்டை லோட் செய்கிறோம்
+            playlist = m3u8.load(child_url)
+            base_url = '/'.join(child_url.split('/')[:-1])
+        # ----------------------------------------------
         
         # AES Key-ஐ கண்டுபிடித்தல்
         key_uri, iv = None, None
@@ -69,7 +84,7 @@ def process_m3u8(m3u8_url, session):
 
         segment_urls = [seg.uri for seg in playlist.segments]
         if not segment_urls:
-            raise Exception("No audio segments found.")
+            raise Exception("No audio segments found even in child playlist.")
         
         if not os.path.exists('downloads'):
             os.makedirs('downloads')
@@ -85,7 +100,7 @@ def process_m3u8(m3u8_url, session):
                 response = session.get(seg_url, stream=True)
                 encrypted_data = response.content
                 
-                # உங்களது பக்காவான Decryption லாஜிக்
+                # AES Decryption லாஜிக்
                 if aes_key and iv:
                     iv_bytes = bytes.fromhex(iv.replace('0x', '')) if isinstance(iv, str) else iv
                     if len(iv_bytes) < 16:
