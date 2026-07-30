@@ -101,7 +101,8 @@ def process_m3u8(m3u8_url, session):
                     cipher = AES.new(aes_key, AES.MODE_CBC, iv_bytes)
                     decrypted_data = cipher.decrypt(encrypted_data)
                     try:
-                        decrypted_data = unpad(decrypted_data,.AES.block_size)
+                        # [FIXED TYPO HERE] Extra dot removed
+                        decrypted_data = unpad(decrypted_data, AES.block_size)
                     except ValueError:
                         pass
                     with open(ts_path, 'wb') as f:
@@ -112,7 +113,6 @@ def process_m3u8(m3u8_url, session):
                         
                 ts_files.append(ts_path)
             
-            # Unique ID பயன்படுத்தி மோதல் (Conflict) ஏற்படுவதைத் தவிர்த்தல்
             unique_name = str(uuid.uuid4())[:8]
             output_file = f"downloads/audio_{unique_name}.mp3"
             list_path = os.path.join(tmpdir, "concat_list.txt")
