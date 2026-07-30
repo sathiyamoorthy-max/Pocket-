@@ -1,6 +1,5 @@
 flask
-python-telegram-bot>=20.3
-playwright
-m3u8
+python-telegram-bot
 requests
+m3u8
 pycryptodome
