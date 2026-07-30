@@ -1,6 +1,6 @@
 flask
 python-telegram-bot>=20.3
-python-telegram-bot>=20.3
-yt-dlp
-pocketfm-dl
-yt-dlp
+playwright
+m3u8
+requests
+pycryptodome
