@@ -5,6 +5,7 @@ import logging
 import threading
 import asyncio
 import uuid
+import tempfile
 import requests
 from PIL import Image
 from flask import Flask
@@ -68,7 +69,6 @@ def get_episode_metadata_and_m3u8(episode_url, session):
     title_match = re.search(r'<meta property="og:title" content="([^"]+)"', html_content)
     raw_title = title_match.group(1) if title_match else "Pocket FM Audio"
     
-    # Clean up Series Name and Episode Title parsing
     series_name = "Pocket FM"
     episode_title = raw_title
     if "|" in raw_title:
@@ -128,7 +128,6 @@ def process_m3u8(m3u8_url, session, chat_id):
             ts_files = []
             
             for i, seg_url in enumerate(segment_urls):
-                # Check if user requested stop
                 if active_tasks.get(chat_id) == "STOP":
                     raise Exception("Download stopped by user.")
 
@@ -232,15 +231,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     active_tasks[chat_id] = "RUNNING"
-    batch_limit = context.user_data.get('batch_limit', '1')
-    
-    # If user selected a batch limit like 10, 20, etc., but sent 1 link, we can treat it or parse multiple
-    # For robust handling, let's process the links provided
     target_urls = urls
-    if len(urls) == 1 and batch_limit != '1':
-        # If it's a single episode link, we can extract series base or inform user
-        # For now, process the links provided by user
-        target_urls = urls
 
     await update.message.reply_text(f"🚀 Found {len(target_urls)} link(s). Starting processing...")
 
