@@ -1,6 +1,7 @@
 import os
 import logging
 import threading
+import asyncio
 from flask import Flask
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
@@ -22,7 +23,6 @@ try:
     DOWNLOADER_AVAILABLE = True
 except ImportError:
     DOWNLOADER_AVAILABLE = False
-    # இந்த லாக் Render சர்வரில் பார்க்கப்படும்
     logger.error("🚨 CRITICAL ERROR: pocketfm_dl component is missing! Please install it or upload the file.")
 
 # --- Flask App (Health check for Render) ---
@@ -41,7 +41,6 @@ def run_flask():
     flask_app.run(host='0.0.0.0', port=port)
 
 # --- Telegram Bot Core Logic ---
-
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "👋 Hello! Send me a direct Pocket FM story link, and I will try to download the audio for you."
@@ -54,20 +53,31 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("⚠️ Please send a valid Pocket FM link.")
         return
 
-    # IMPORTANT FIX: Downloader இருக்கிறதா என்று முதலில் சோதிக்கவும்
     if not DOWNLOADER_AVAILABLE:
         await update.message.reply_text("❌ Download component is not installed. Contact admin (pocketfm_dl is missing).")
         return
 
-    await update.message.reply_text("⏳ Processing your request, please wait...")
+    msg = await update.message.reply_text("⏳ Processing your request, please wait...")
 
     try:
-        audio_file_path = pocketfm_dl.download(user_message)
+        # Using asyncio.to_thread to prevent bot freezing during download
+        audio_file_path = await asyncio.to_thread(pocketfm_dl.download, user_message)
+        
+        await msg.edit_text("📤 Uploading audio to Telegram...")
+        
         with open(audio_file_path, 'rb') as audio:
             await update.message.reply_audio(audio=audio, title="Downloaded Story")
+            
         logger.info(f"Successfully processed link: {user_message}")
+        
+        # 🧹 IMPORTANT FIX: Delete the file after sending to save server memory!
+        if os.path.exists(audio_file_path):
+            os.remove(audio_file_path)
+            
+        await msg.delete()
+        
     except Exception as e:
-        await update.message.reply_text(f"❌ Sorry, download failed. Error: {e}")
+        await msg.edit_text(f"❌ Sorry, download failed. Error: {e}")
         logger.error(f"Error processing {user_message}: {e}")
 
 def run_bot():
