@@ -1,5 +1,6 @@
-flask
 python-telegram-bot
+flask
 requests
 m3u8
 pycryptodome
+pillow
