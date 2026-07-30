@@ -29,22 +29,25 @@ def load_cookies(cookie_file='cookies.txt'):
 def get_m3u8_url(episode_url, session):
     headers = {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36',
+        'Referer': 'https://pocketfm.com/'
     }
     logger.info(f"Fetching episode page: {episode_url}")
     
-    # பிரவுசர் இல்லாமல் நேரடியாக HTML-ஐ மட்டும் ரிக்வெஸ்ட் செய்கிறோம்
     response = session.get(episode_url, headers=headers)
     
-    # HTML-க்குள் ஒளிந்திருக்கும் ரகசிய M3U8 லிங்கை Regex மூலம் தேடுகிறோம்
-    m3u8_match = re.search(r'(https?://[^\s"\'<>]+\.m3u8[^\s"\'<>]*)', response.text)
+    # Cloudfront அல்லது m3u8 லிங்கைத் துல்லியமாகத் தேடும் புதிய மாஸ்டர் Regex
+    m3u8_match = re.search(r'(https?://[^\s"\'<>]+\.cloudfront\.net[^\s"\'<>]*?\.m3u8[^\s"\'<>]*)', response.text)
     
+    if not m3u8_match:
+        # ஒருவேளை Cloudfront இல்லையெனில், பொதுவான m3u8 லிங்கைத் தேடும்
+        m3u8_match = re.search(r'(https?://[^\s"\'<>]+\.m3u8[^\s"\'<>]*)', response.text)
+        
     if m3u8_match:
-        # JSON-ல் இருந்தால் லிங்கில் உள்ள '\/' குறியீட்டை சரிசெய்கிறோம்
         clean_url = m3u8_match.group(1).replace('\\/', '/').replace('\\u002F', '/')
-        logger.info(f"Found M3U8 URL: {clean_url}")
+        logger.info(f"Found Direct M3U8/CDN URL: {clean_url}")
         return clean_url
     else:
-        raise Exception("M3U8 URL not found! Please check if cookies.txt is valid and up to date.")
+        raise Exception("M3U8 URL not found! Please check if cookies.txt is valid.")
 
 def process_m3u8(m3u8_url, session):
     try:
@@ -52,19 +55,15 @@ def process_m3u8(m3u8_url, session):
         playlist = m3u8.load(m3u8_url)
         base_url = '/'.join(m3u8_url.split('/')[:-1])
         
-        # --- NEW LOGIC: Master Playlist-ஐ கையாளுதல் ---
-        # ஆடியோ துண்டுகள் இல்லை, ஆனால் வேறு பிளேலிஸ்ட்கள் இருந்தால்...
+        # Master Playlist-ஐ கையாளுதல்
         if not playlist.segments and playlist.playlists:
             logger.info("Master playlist detected! Extracting the actual audio playlist...")
-            # முதல் குவாலிட்டி லிங்க்கை எடுக்கிறோம்
             child_uri = playlist.playlists[0].uri
             child_url = child_uri if child_uri.startswith('http') else f"{base_url}/{child_uri}"
             logger.info(f"Loading child M3U8: {child_url}")
             
-            # உண்மையான ஆடியோ பிளேலிஸ்ட்டை லோட் செய்கிறோம்
             playlist = m3u8.load(child_url)
             base_url = '/'.join(child_url.split('/')[:-1])
-        # ----------------------------------------------
         
         # AES Key-ஐ கண்டுபிடித்தல்
         key_uri, iv = None, None
@@ -139,12 +138,10 @@ def process_m3u8(m3u8_url, session):
 
 async def async_download(url):
     session = requests.Session()
-    # Cookies-ஐ செட் செய்தல்
     session.cookies.update(load_cookies())
     
     m3u8_url = get_m3u8_url(url, session)
     return process_m3u8(m3u8_url, session)
 
-# உங்களது app.py அழைக்கும் மெயின் பங்க்ஷன்
 def download(url):
     return asyncio.run(async_download(url))
