@@ -6,6 +6,7 @@ import tempfile
 import requests
 import m3u8
 import asyncio
+import uuid
 from Crypto.Cipher import AES
 from Crypto.Util.Padding import unpad
 
@@ -33,47 +34,36 @@ def get_episode_metadata_and_m3u8(episode_url, session):
     }
     logger.info(f"Fetching episode page metadata: {episode_url}")
     
-    # பாதுகாப்பான Timeout உடன் கோரிக்கை
     response = session.get(episode_url, headers=headers, timeout=20)
     html_content = response.text
     
-    # 1. எபிசோட் தலைப்பை எடுத்தல்
     title_match = re.search(r'<meta property="og:title" content="([^"]+)"', html_content)
     episode_title = title_match.group(1) if title_match else "Pocket FM Audio"
     
-    # 2. போஸ்டர் படத்தின் லிங்கை எடுத்தல்
     img_match = re.search(r'<meta property="og:image" content="([^"]+)"', html_content)
     thumbnail_url = img_match.group(1) if img_match else None
     
-    logger.info(f"Extracted Title: {episode_title}")
-    
-    # 3. Direct M3U8 / Cloudfront லிங்கை எடுத்தல்
     m3u8_match = re.search(r'(https?://[^\s"\'<>]+\.cloudfront\.net[^\s"\'<>]*?\.m3u8[^\s"\'<>]*)', html_content)
     if not m3u8_match:
         m3u8_match = re.search(r'(https?://[^\s"\'<>]+\.m3u8[^\s"\'<>]*)', html_content)
         
     if m3u8_match:
         clean_url = m3u8_match.group(1).replace('\\/', '/').replace('\\u002F', '/')
-        logger.info(f"Found M3U8 URL: {clean_url}")
         return clean_url, episode_title, thumbnail_url
     else:
         raise Exception("M3U8 URL not found! Please check if cookies.txt is valid.")
 
 def process_m3u8(m3u8_url, session):
     try:
-        logger.info(f"Loading M3U8 playlist: {m3u8_url}")
         playlist = m3u8.load(m3u8_url)
         base_url = '/'.join(m3u8_url.split('/')[:-1])
         
-        # Master Playlist கையாளுதல்
         if not playlist.segments and playlist.playlists:
-            logger.info("Master playlist detected! Extracting actual audio playlist...")
             child_uri = playlist.playlists[0].uri
             child_url = child_uri if child_uri.startswith('http') else f"{base_url}/{child_uri}"
             playlist = m3u8.load(child_url)
             base_url = '/'.join(child_url.split('/')[:-1])
         
-        # AES Key கண்டறிதல்
         key_uri, iv = None, None
         if playlist.keys:
             key_obj = playlist.keys[0]
@@ -101,7 +91,6 @@ def process_m3u8(m3u8_url, session):
                 seg_url = seg_url if seg_url.startswith('http') else f"{base_url}/{seg_url}"
                 ts_path = os.path.join(tmpdir, f"chunk_{i:04d}.ts")
                 
-                # ஒவ்வொரு துண்டையும் பாதுகாப்பாக டவுன்லோட் செய்தல்
                 response = session.get(seg_url, stream=True, timeout=20)
                 encrypted_data = response.content
                 
@@ -112,7 +101,7 @@ def process_m3u8(m3u8_url, session):
                     cipher = AES.new(aes_key, AES.MODE_CBC, iv_bytes)
                     decrypted_data = cipher.decrypt(encrypted_data)
                     try:
-                        decrypted_data = unpad(decrypted_data, AES.block_size)
+                        decrypted_data = unpad(decrypted_data,.AES.block_size)
                     except ValueError:
                         pass
                     with open(ts_path, 'wb') as f:
@@ -123,14 +112,14 @@ def process_m3u8(m3u8_url, session):
                         
                 ts_files.append(ts_path)
             
-            output_file = "downloads/downloaded_audio.mp3"
+            # Unique ID பயன்படுத்தி மோதல் (Conflict) ஏற்படுவதைத் தவிர்த்தல்
+            unique_name = str(uuid.uuid4())[:8]
+            output_file = f"downloads/audio_{unique_name}.mp3"
             list_path = os.path.join(tmpdir, "concat_list.txt")
             with open(list_path, 'w') as f:
                 for f_path in ts_files:
                     f.write(f"file '{f_path}'\n")
             
-            # FFmpeg மூலம் இணைத்து MP3 ஆக்குதல்
-            logger.info("Merging segments using FFmpeg...")
             cmd = ['ffmpeg', '-y', '-f', 'concat', '-safe', '0', '-i', list_path, '-c:a', 'libmp3lame', '-q:a', '2', output_file]
             subprocess.run(cmd, check=True, capture_output=True)
             
@@ -140,14 +129,9 @@ def process_m3u8(m3u8_url, session):
         logger.error(f"Error in process_m3u8: {e}")
         raise Exception(f"Download failed: {e}")
 
-async def async_download(url):
+def download(url):
     session = requests.Session()
     session.cookies.update(load_cookies())
-    
     m3u8_url, title, thumb_url = get_episode_metadata_and_m3u8(url, session)
     audio_file = process_m3u8(m3u8_url, session)
-    
     return audio_file, title, thumb_url
-
-def download(url):
-    return asyncio.run(async_download(url))
