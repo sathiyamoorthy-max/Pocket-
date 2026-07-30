@@ -33,20 +33,21 @@ def get_episode_metadata_and_m3u8(episode_url, session):
     }
     logger.info(f"Fetching episode page metadata: {episode_url}")
     
-    response = session.get(episode_url, headers=headers)
+    # பாதுகாப்பான Timeout உடன் கோரிக்கை
+    response = session.get(episode_url, headers=headers, timeout=20)
     html_content = response.text
     
-    # 1. எபிசோட் தலைப்பை (Title) எடுத்தல்
+    # 1. எபிசோட் தலைப்பை எடுத்தல்
     title_match = re.search(r'<meta property="og:title" content="([^"]+)"', html_content)
     episode_title = title_match.group(1) if title_match else "Pocket FM Audio"
     
-    # 2. போஸ்டர் படத்தின் லிங்கை (Thumbnail Image) எடுத்தல்
+    # 2. போஸ்டர் படத்தின் லிங்கை எடுத்தல்
     img_match = re.search(r'<meta property="og:image" content="([^"]+)"', html_content)
     thumbnail_url = img_match.group(1) if img_match else None
     
     logger.info(f"Extracted Title: {episode_title}")
     
-    # 3. Cloudfront அல்லது Direct M3U8 லிங்கை எடுத்தல்
+    # 3. Direct M3U8 / Cloudfront லிங்கை எடுத்தல்
     m3u8_match = re.search(r'(https?://[^\s"\'<>]+\.cloudfront\.net[^\s"\'<>]*?\.m3u8[^\s"\'<>]*)', html_content)
     if not m3u8_match:
         m3u8_match = re.search(r'(https?://[^\s"\'<>]+\.m3u8[^\s"\'<>]*)', html_content)
@@ -83,7 +84,7 @@ def process_m3u8(m3u8_url, session):
         aes_key = None
         if key_uri:
             key_url = key_uri if key_uri.startswith('http') else f"{base_url}/{key_uri}"
-            response = session.get(key_url)
+            response = session.get(key_url, timeout=20)
             aes_key = response.content
 
         segment_urls = [seg.uri for seg in playlist.segments]
@@ -100,7 +101,8 @@ def process_m3u8(m3u8_url, session):
                 seg_url = seg_url if seg_url.startswith('http') else f"{base_url}/{seg_url}"
                 ts_path = os.path.join(tmpdir, f"chunk_{i:04d}.ts")
                 
-                response = session.get(seg_url, stream=True)
+                # ஒவ்வொரு துண்டையும் பாதுகாப்பாக டவுன்லோட் செய்தல்
+                response = session.get(seg_url, stream=True, timeout=20)
                 encrypted_data = response.content
                 
                 if aes_key and iv:
