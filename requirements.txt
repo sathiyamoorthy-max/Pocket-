@@ -1,5 +1,5 @@
 flask
-python-telegram-bot
+python-telegram-bot>=20.3
 requests
 m3u8
 pycryptodome
@@ -7,4 +7,4 @@ Pillow
 yt-dlp
 psutil
 python-dotenv
-curl_cffi
+cloudscraper
