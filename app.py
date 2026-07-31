@@ -28,14 +28,14 @@ flask_app = Flask(__name__)
 
 @flask_app.route('/')
 def index():
-    return "Ultimate Cookied Bot is online!"
+    return "Ultimate Resolver Bot is online!"
 
 def run_flask():
     port = int(os.environ.get('PORT', 5000))
     flask_app.run(host='0.0.0.0', port=port)
 
 # ==========================================
-# 🔥 COOKIE LOADER (NEW - இது 403-ஐ சரி செய்யும்!)
+# 🔥 COOKIE LOADER (கண்டிப்பாக தேவை)
 # ==========================================
 COOKIE_FILE = 'cookies.txt'
 session = requests.Session()
@@ -53,7 +53,7 @@ def load_cookies():
     return False
 
 # ==========================================
-# 🔥 SMART FUTURE EPISODE TRACKER
+# 🔥 SMART SERIES TRACKER & RESOLVER
 # ==========================================
 TRACKER_FILE = 'series_cache.json'
 
@@ -86,11 +86,7 @@ def get_series_data(series_url):
     headers = {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36',
         'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
-        'Accept-Language': 'en-US,en;q=0.5',
-        'Connection': 'keep-alive',
-        'Upgrade-Insecure-Requests': '1',
     }
-    # 🔥 Session-ஐ பயன்படுத்துவதால் Cookies வெற்றிகரமாக செல்லும்
     resp = session.get(series_url, headers=headers, timeout=30)
     html = resp.text
     
@@ -99,7 +95,7 @@ def get_series_data(series_url):
 
     json_match = re.search(r'<script id="__NEXT_DATA__" type="application/json">(.*?)</script>', html, re.DOTALL)
     if not json_match:
-        raise Exception("Cloudflare Block or Data missing. Please make sure `cookies.txt` is uploaded in Render Shell.")
+        raise Exception("Cloudflare Block. Check if cookies.txt is valid.")
     
     data = json.loads(json_match.group(1))
     all_episodes = extract_episodes_from_json(data)
@@ -112,7 +108,6 @@ def download_chunk(args):
         ts_path = os.path.join(tmpdir, f"chunk_{i:04d}.ts")
         response = session.get(full_url, stream=True, timeout=15)
         data = response.content
-        
         if aes_key and iv:
             iv_bytes = bytes.fromhex(iv.replace('0x', '')) if isinstance(iv, str) else iv
             iv_bytes = iv_bytes.ljust(16, b'\0')
@@ -134,7 +129,6 @@ def download_chunk(args):
 def download_audio_from_m3u8(m3u8_url):
     playlist = m3u8.load(m3u8_url)
     base_url = '/'.join(m3u8_url.split('/')[:-1])
-    
     if not playlist.segments and playlist.playlists:
         m3u8_url = playlist.playlists[0].uri
         m3u8_url = m3u8_url if m3u8_url.startswith('http') else f"{base_url}/{m3u8_url}"
@@ -149,49 +143,37 @@ def download_audio_from_m3u8(m3u8_url):
         aes_key = session.get(key_url).content
 
     segments = [seg.uri for seg in playlist.segments]
-    
     with tempfile.TemporaryDirectory() as tmpdir:
         tasks = [(i, seg, base_url, aes_key, iv, tmpdir) for i, seg in enumerate(segments)]
         ts_files_dict = {}
-        
         with ThreadPoolExecutor(max_workers=10) as executor:
             futures = [executor.submit(download_chunk, arg) for arg in tasks]
             for future in as_completed(futures):
                 idx, path = future.result()
                 if path:
                     ts_files_dict[idx] = path
-                    
         ts_files = [ts_files_dict[i] for i in sorted(ts_files_dict.keys())]
-        
-        if not os.path.exists('downloads'):
-            os.makedirs('downloads')
-            
+        if not os.path.exists('downloads'): os.makedirs('downloads')
         unique_name = str(uuid.uuid4())[:8]
         output_file = f"downloads/audio_{unique_name}.mp3"
         list_path = os.path.join(tmpdir, "list.txt")
-        
         with open(list_path, 'w') as f:
             for ts in ts_files:
                 f.write(f"file '{ts}'\n")
-                
         subprocess.run(['ffmpeg', '-y', '-f', 'concat', '-safe', '0', '-i', list_path, '-c:a', 'libmp3lame', '-q:a', '2', output_file], check=True, capture_output=True)
         return output_file
 
 def get_episode_metadata(episode_url):
     headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36'}
-    # 🔥 Session-ஐ பயன்படுத்துவதால் Cookies வெற்றிகரமாக செல்லும்
     resp = session.get(episode_url, headers=headers, timeout=20)
     html = resp.text
-    
     title = re.search(r'<meta property="og:title" content="([^"]+)"', html)
     img = re.search(r'<meta property="og:image" content="([^"]+)"', html)
     m3u8 = re.search(r'(https?://[^\s"\'<>]+\.cloudfront\.net[^\s"\'<>]*?\.m3u8[^\s"\'<>]*)', html)
     if not m3u8:
         m3u8 = re.search(r'(https?://[^\s"\'<>]+\.m3u8[^\s"\'<>]*)', html)
-        
     if not m3u8:
         raise Exception("M3U8 not found")
-        
     ep_title = title.group(1).split("|")[0].strip() if title else "Episode"
     return m3u8.group(1), ep_title, img.group(1) if img else None
 
@@ -199,7 +181,6 @@ async def download_and_send_episode(update, context, ep_url, ep_number=None, tot
     try:
         m3u8_url, title, thumb_url = await asyncio.to_thread(get_episode_metadata, ep_url)
         audio_path = await asyncio.to_thread(download_audio_from_m3u8, m3u8_url)
-        
         thumb_path = None
         if thumb_url:
             t_id = str(uuid.uuid4())[:8]
@@ -210,46 +191,65 @@ async def download_and_send_episode(update, context, ep_url, ep_number=None, tot
                 Image.open(thumb_path).convert('RGB').thumbnail((320, 320)).save(thumb_path, 'JPEG')
             except:
                 thumb_path = None
-
         display_title = f"{title}"
         if ep_number and total_eps:
             display_title = f"[{ep_number}/{total_eps}] {title}"
-
         with open(audio_path, 'rb') as audio:
             thumb_file = open(thumb_path, 'rb') if thumb_path and os.path.exists(thumb_path) else None
             await update.message.reply_audio(audio=audio, title=display_title, performer="Pocket FM", thumbnail=thumb_file)
             if thumb_file: thumb_file.close()
-
         if os.path.exists(audio_path): os.remove(audio_path)
         if thumb_path and os.path.exists(thumb_path): os.remove(thumb_path)
         return True, title
     except Exception as e:
         return False, str(e)
 
+# ==========================================
+# 🕵️ SMART ONELINK RESOLVER
+# ==========================================
+def resolve_onelink(onelink_url):
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/132.0.0.0 Mobile Safari/537.36'
+    }
+    try:
+        # மொபைல் யூசர் ஏஜெண்ட் பயன்படுத்தி ரெடைரெக்ட் ஃபாலோ பண்ணுதல்
+        resp = requests.get(onelink_url, headers=headers, allow_redirects=True, timeout=15)
+        final_url = resp.url
+        if 'pocketfm.com/show/' in final_url or 'pocketfm.com/episode/' in final_url:
+            return final_url
+        return None
+    except Exception as e:
+        logger.error(f"Deep link resolve error: {e}")
+        return None
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # Cookies உள்ளதா என்று முதலில் சோதித்து காட்டும்
     cookie_status = "✅ Loaded" if load_cookies() else "❌ Not Found (Please upload cookies.txt via Render Shell)"
     await update.message.reply_text(
-        f"🚀 **Pocket FM Ultimate Bot**\n\n"
+        f"🚀 **Pocket FM Ultimate Bot (Deep Link Resolver)**\n\n"
         f"🍪 Cookies Status: {cookie_status}\n\n"
         "📌 **Features:**\n"
-        "1. **Single Link:** `/episode/...`\n"
-        "2. **Multi-Link Mode:** Send multiple `/episode/...` links in ONE message!\n"
-        "3. **Full Series:** `/show/...`\n"
-        "4. **Range Option:** `/show/... | 1 to 10`\n\n"
-        "✨ **Future Update Aware:** Send the `/show/` link anytime later. I will only download NEW episodes!"
+        "1. **Smart Resolve:** Even `onelink.me` links will be auto-converted and downloaded!\n"
+        "2. **Full Series:** `/show/...` (Track future eps)\n"
+        "3. **Multi-Link Mode:** Paste multiple links in one message.\n\n"
+        "⚠️ **Note:** Requires `cookies.txt` in Render Shell to avoid 403 Error."
     )
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text.strip()
     msg = await update.message.reply_text("🔍 Analyzing link(s)...")
 
-    # 🍪 Cookies-ஐ லோட் செய்தல் (Configurable Session)
-    load_cookies()
+    load_cookies() # Session-ஐ Cookies உடன் உருவாக்குதல்
 
+    # 🕵️ ONELINK RESOLVER (இதுதான் புதிய மேஜிக்!)
     if 'onelink.me' in text:
-        await msg.edit_text("❌ `onelink.me` is an App Store link. Send actual `pocketfm.com/episode/` or `/show/` link.")
-        return
+        await msg.edit_text("🔄 Resolving App Store redirect...")
+        resolved_url = await asyncio.to_thread(resolve_onelink, text)
+        if resolved_url:
+            text = resolved_url
+            await msg.edit_text(f"✅ Resolved to: `{text}`. Proceeding to download...")
+        else:
+            await msg.edit_text("❌ Could not resolve `onelink.me` to a Pocket FM link. Please send the actual `/episode/` or `/show/` link.")
+            return
 
     try:
         # 🟢 MULTI-LINK BATCH MODE
@@ -261,11 +261,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 
             total = len(urls)
             await msg.edit_text(f"🚀 **Multi-Link Batch Active:** {total} links.")
-            
             for idx, url in enumerate(urls, 1):
                 await msg.edit_text(f"⏳ Processing {idx}/{total}...")
                 await download_and_send_episode(update, context, url, ep_number=idx, total_eps=total)
-                    
             await msg.edit_text(f"✅ **Multi-Link Complete!**")
             return
 
@@ -280,11 +278,10 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
             tracker = load_tracker()
             old_episodes = tracker.get(show_id, [])
-            
             new_episodes = [ep for ep in current_episodes if ep not in old_episodes]
 
             if not new_episodes:
-                await msg.edit_text(f"📊 **{series_title}**\n📈 Total: {total_found}\n✅ All episodes are already downloaded. No new episodes found.")
+                await msg.edit_text(f"📊 **{series_title}**\n📈 Total: {total_found}\n✅ All episodes already downloaded. No new episodes found.")
                 return
 
             range_match = re.search(r'\|?\s*(\d+)\s*to\s*(\d+)', text)
