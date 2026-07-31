@@ -19,7 +19,7 @@ from flask import Flask
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, filters, ContextTypes
 
-# M3U8 & Crypto
+# M3U8, Crypto & YT-DLP
 import m3u8
 from Crypto.Cipher import AES
 from Crypto.Util.Padding import unpad
@@ -28,17 +28,19 @@ import yt_dlp
 load_dotenv()
 
 # ==========================================
-# ⚡ 1. CONFIG & PROXY SETUP (FULLY PATCHED)
+# ⚡ 1. CONFIG, PROXY & TLS SETUP (100% FIXED)
 # ==========================================
-PROXY_URL = None  # Add working proxy here if needed (e.g., 'http://user:pass@ip:port')
+PROXY_URL = None  # உங்களது Proxy IP இருந்தால் இங்கே போடலாம் (எ.கா: 'http://ip:port')
+
+# 🔥 FIXED: requests 라이ப்ரரி நிரந்தரமாக Import செய்யப்பட்டுள்ளது!
+import requests
 
 try:
     from curl_cffi import requests as curl_requests
     CURL_AVAILABLE = True
 except ImportError:
     CURL_AVAILABLE = False
-    import requests as curl_requests
-    import requests
+    curl_requests = requests  # curl_cffi இல்லை என்றால் சாதாரண requests-ஐப் பயன்படுத்தும்
 
 TOKEN = os.getenv("TELEGRAM_TOKEN") or os.getenv("TELEGRAM_BOT_TOKEN")
 if not TOKEN:
@@ -52,12 +54,13 @@ logger = logging.getLogger(__name__)
 flask_app = Flask(__name__)
 @flask_app.route('/')
 def index():
-    return "Advanced Bot is Online and Running flawlessly!"
+    return "Advanced Pocket FM & Media Bot is Online!"
 
 def run_flask():
     port = int(os.environ.get('PORT', 5000))
     flask_app.run(host='0.0.0.0', port=port)
 
+# இப்போது requests பிழை வராது!
 session = requests.Session()
 STATS = {"downloads": 0, "start_time": time.time()}
 USER_CACHE = {}
@@ -71,7 +74,7 @@ def human_readable_size(size_bytes):
     s = round(size_bytes / p, 2)
     return f"{s} {size_name[i]}"
 
-# 🛠️ FIXED: Universal Request Fetcher (Always uses Proxy if available)
+# 🛠️ Universal Request Fetcher (Proxy Support)
 def fetch_page(url, headers=None, timeout=30, stream=False):
     proxies = {'http': PROXY_URL, 'https': PROXY_URL} if PROXY_URL else None
     
@@ -163,7 +166,6 @@ def download_chunk(args):
         full_url = seg_url if seg_url.startswith('http') else f"{base_url}/{seg_url}"
         ts_path = os.path.join(tmpdir, f"chunk_{i:04d}.ts")
         
-        # 🛠️ FIXED: Now chunks use the Proxy & robust connection
         response = fetch_page(full_url, timeout=20, stream=True)
         data = response.content
         
@@ -183,7 +185,6 @@ def download_chunk(args):
         return i, None
 
 def download_audio_from_m3u8(m3u8_url):
-    # 🛠️ FIXED: Fetch M3U8 content securely using our bypass/proxy logic!
     m3u8_content = fetch_page(m3u8_url, timeout=15).text
     playlist = m3u8.loads(m3u8_content, uri=m3u8_url)
     base_url = '/'.join(m3u8_url.split('/')[:-1])
@@ -200,7 +201,6 @@ def download_audio_from_m3u8(m3u8_url):
         key_uri = playlist.keys[0].uri
         iv = playlist.keys[0].iv
         key_url = key_uri if key_uri.startswith('http') else f"{base_url}/{key_uri}"
-        # 🛠️ FIXED: Key fetching must also use bypass/proxy!
         aes_key = fetch_page(key_url, timeout=15).content
 
     segments = [seg.uri for seg in playlist.segments]
@@ -208,7 +208,6 @@ def download_audio_from_m3u8(m3u8_url):
         tasks = [(i, seg, base_url, aes_key, iv, tmpdir) for i, seg in enumerate(segments)]
         ts_files_dict = {}
         
-        # 🛠️ FIXED: Reduced workers to 5 to prevent RAM crash in Render
         with ThreadPoolExecutor(max_workers=5) as executor:
             futures = [executor.submit(download_chunk, arg) for arg in tasks]
             for future in as_completed(futures):
@@ -262,7 +261,6 @@ async def download_and_send_episode(update, context, ep_url, ep_number=None, tot
         display_title = f"[{ep_number}/{total_eps}] {title}" if ep_number and total_eps else title
         chat_id = update.effective_chat.id
         
-        # 🛠️ FIXED: Added read_timeout to prevent Telegram upload crashes
         with open(audio_path, 'rb') as audio:
             thumb_file = open(thumb_path, 'rb') if thumb_path and os.path.exists(thumb_path) else None
             await context.bot.send_audio(
@@ -302,7 +300,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.message.edit_text("⏳ Downloading media to server...")
 
     ydl_opts = {'outtmpl': f"downloads/{user_id}_%(id)s.%(ext)s", 'quiet': True}
-    if PROXY_URL: ydl_opts['proxy'] = PROXY_URL # 🛠️ FIXED: YT-DLP uses proxy now
+    if PROXY_URL: ydl_opts['proxy'] = PROXY_URL
     
     if choice == "dl_best": ydl_opts['format'] = 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best'
     elif choice == "dl_720": ydl_opts['format'] = 'bestvideo[height<=720][ext=mp4]+bestaudio[ext=m4a]/best'
@@ -328,7 +326,6 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         await query.message.edit_text("⬆️ Uploading to Telegram...")
         with open(file_path, 'rb') as f:
-            # 🛠️ FIXED: Added timeouts for heavy uploads
             if choice == "dl_audio":
                 await context.bot.send_audio(chat_id=query.message.chat_id, audio=f, caption=title, read_timeout=120, write_timeout=120)
             else:
@@ -411,7 +408,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 def main():
     if not os.path.exists("downloads"): os.makedirs("downloads")
     
-    # 🛠️ FIXED: Proper Application initialization with increased timeouts
     app = Application.builder().token(TOKEN).connect_timeout(60).read_timeout(60).write_timeout(60).build()
     
     app.add_handler(CommandHandler("start", start_command))
