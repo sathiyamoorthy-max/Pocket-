@@ -137,9 +137,22 @@ def download_chunk(args):
         full_url = seg_url if seg_url.startswith('http') else f"{base_url}/{seg_url}"
         ts_path = os.path.join(tmpdir, f"chunk_{i:04d}.ts")
         
-        response = session.get(full_url, headers=HEADERS, timeout=20, stream=True)
+        # 🔥 AUDIO CDN-ஐ ஏமாற்ற பிரத்யேக Headers
+        chunk_headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'Accept': '*/*',
+            'Origin': 'https://pocketfm.com',
+            'Referer': 'https://pocketfm.com/'
+        }
+        
+        response = session.get(full_url, headers=chunk_headers, timeout=20, stream=True)
         data = response.content
         
+        # கிளவுட்ஃப்ளேர் தடுத்து HTML பேஜை அனுப்பினால் அதை நிராகரிக்க
+        if b'<html' in data[:100].lower():
+            logger.error(f"Chunk {i} blocked by Cloudflare CDN.")
+            return i, None
+            
         if aes_key and iv:
             iv_bytes = bytes.fromhex(iv.replace('0x', '')) if isinstance(iv, str) else iv
             iv_bytes = iv_bytes.ljust(16, b'\0')
@@ -151,7 +164,8 @@ def download_chunk(args):
         else:
             with open(ts_path, 'wb') as f: f.write(data)
         return i, ts_path
-    except:
+    except Exception as e:
+        logger.error(f"Chunk error: {e}")
         return i, None
 
 def download_audio_from_m3u8(m3u8_url):
@@ -251,8 +265,8 @@ async def download_and_send_episode(update, context, ep_url, ep_number=None, tot
 # 🤖 TELEGRAM HANDLERS
 # ==========================================
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    msg = f"👋 Hello {update.effective_user.first_name}!\n\nWelcome to *Pocket FM Stable Bot*!\nSend any Pocket FM link.\n\nPowered by {WATERMARK}"
-    await update.message.reply_text(msg, parse_mode="Markdown")
+    # Modified simple start message
+    await update.message.reply_text("🔗 Send any Pocket FM link.")
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text.strip()
