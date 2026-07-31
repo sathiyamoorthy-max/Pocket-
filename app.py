@@ -27,14 +27,14 @@ logger = logging.getLogger(__name__)
 flask_app = Flask(__name__)
 @flask_app.route('/')
 def index():
-    return "World Class Ultimate Bot Online!"
+    return "Ultimate Bot Online!"
 
 def run_flask():
     port = int(os.environ.get('PORT', 5000))
     flask_app.run(host='0.0.0.0', port=port)
 
 # ==========================================
-# ✅ 1. GLOBAL SESSION & COOKIE SETUP (இதை வைக்க மறக்காதீர்கள்!)
+# GLOBAL SESSION & COOKIE SETUP
 # ==========================================
 COOKIE_FILE = 'cookies.txt'
 session = requests.Session()
@@ -52,7 +52,7 @@ def load_cookies():
     return False
 
 # ==========================================
-# ✅ 2. SMART ONELINK RESOLVER & FETCHER
+# SMART ONELINK RESOLVER
 # ==========================================
 def resolve_onelink(onelink_url):
     headers = {'User-Agent': 'Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/132.0.0.0 Mobile Safari/537.36'}
@@ -65,7 +65,7 @@ def resolve_onelink(onelink_url):
         return None
 
 # ==========================================
-# ✅ 3. FUTURE TRACKER (series_cache.json)
+# FUTURE EPISODE TRACKER
 # ==========================================
 TRACKER_FILE = 'series_cache.json'
 def load_tracker():
@@ -79,21 +79,16 @@ def save_tracker(data):
         json.dump(data, f)
 
 # ==========================================
-# 🔥 4. ULTIMATE SERIES FETCHER (Mobile UA + Session)
+# 403 FIX: SMART ERROR GUIDE INSIDE THE FUNCTION
 # ==========================================
 def get_series_data(series_url):
-    # 1. URL-ல் இருந்து Show ID-ஐ மட்டும் தனியாக உருவுதல்
     match = re.search(r'/show/([a-zA-Z0-9_-]+)', series_url)
     if not match:
         raise Exception("Invalid Show URL format.")
-    
     show_id = match.group(1).split('?')[0]
-    
-    # 2. Pocket FM-ன் பக்கத்திற்கு Mobile User-Agent மூலம் செல்லுதல் (Cloudflare Bypass)
     api_url = f"https://pocketfm.com/show/{show_id}"
     
     headers = {
-        # 🔥 மொபைல் சஃபாரி பிரவுஸர் போல நடித்தல்
         'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1',
         'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
         'Accept-Language': 'en-US,en;q=0.9',
@@ -101,57 +96,51 @@ def get_series_data(series_url):
     }
     
     try:
-        # 🔥 இங்கே `session` பயன்படுத்துவதால், `cookies.txt` தானாகவே செல்லும்!
         resp = session.get(api_url, headers=headers, timeout=30)
-        
         if resp.status_code == 403:
-            raise Exception("Cloudflare blocked the request. Use Multi-Link Mode.")
-            
+            raise Exception("RENDER_IP_BLOCKED")
         html = resp.text
-        
-        # 3. சீரிஸ் டைட்டிலை எடுப்பது
         title_match = re.search(r'<meta property="og:title" content="([^"]+)"', html)
         series_title = title_match.group(1).split("|")[0].strip() if title_match else "Pocket FM Series"
-        
-        # 4. __NEXT_DATA__ JSON-ஐ முழுமையாக உருவுவது
         json_match = re.search(r'<script id="__NEXT_DATA__" type="application/json">(.*?)</script>', html, re.DOTALL)
         if not json_match:
             raise Exception("Could not extract Next.js JSON payload.")
-            
         data = json.loads(json_match.group(1))
         
-        # 5. ரிகர்சிவ் முறையில் அத்தனை எபிசோட் ID-ஐ எடுப்பது
         episodes_map = []
-        
         def extract_episodes(node):
             if isinstance(node, dict):
                 ep_id = node.get('episodeId') or node.get('id')
                 if ep_id and isinstance(ep_id, str) and len(ep_id) > 10:
-                    ep_url = f"https://pocketfm.com/episode/{ep_id}"
-                    episodes_map.append({'url': ep_url})
-                
+                    episodes_map.append({'url': f"https://pocketfm.com/episode/{ep_id}"})
                 for k, v in node.items():
                     extract_episodes(v)
             elif isinstance(node, list):
                 for item in node:
                     extract_episodes(item)
-                    
         extract_episodes(data)
-        
-        # டூப்ளிகேட்களை (Duplicates) நீக்கி தனித்துவமான லிங்க்களை மட்டும் தருதல்
         unique_episodes = {ep['url']: ep for ep in episodes_map}.values()
         ep_list = list(unique_episodes)
-        
         if not ep_list:
             raise Exception("Episodes not found inside JSON structure.")
-            
         return series_title, [ep['url'] for ep in ep_list]
         
     except Exception as e:
-        raise Exception(f"Bypass Error: {str(e)}")
+        if str(e) == "RENDER_IP_BLOCKED":
+            # 🔥 இங்கேதான் பயனருக்கு Bypass வழிகாட்டியை போட் சொல்லும்!
+            raise Exception(
+                "❌ **Render IP Blocked by Cloudflare.**\n\n"
+                "💡 Use **'Multi-Link Bypass Mode'** to download this series:\n"
+                "1️⃣ Open this Show page in **Kiwi Browser**.\n"
+                "2️⃣ Tap `...` (Menu) -> `Developer Tools` -> `Console`.\n"
+                "3️⃣ **Copy & Paste this JS code** and hit Enter:\n"
+                "`document.querySelectorAll('a[href*=\"/episode/\"]').forEach(a => { if(a.href) console.log(a.href); });`\n"
+                "4️⃣ **Copy the output list** and **paste ALL links** here in ONE message. I will download them in BATCH for you!"
+            )
+        raise e
 
 # ==========================================
-# ✅ 5. DOWNLOAD CORE (CHUNK MERGING & AES)
+# DOWNLOAD CORE (M3U8, AES, FFMPEG)
 # ==========================================
 def download_chunk(args):
     i, seg_url, base_url, aes_key, iv, tmpdir = args
@@ -254,37 +243,33 @@ async def download_and_send_episode(update, context, ep_url, ep_number=None, tot
         return False, str(e)
 
 # ==========================================
-# ✅ 6. BOT HANDLERS
+# BOT HANDLERS (FULLY SELF-CONTAINED)
 # ==========================================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     load_cookies()
     await update.message.reply_text(
         "🚀 **World Class Pocket FM Downloader**\n\n"
-        "✅ **Features:**\n"
-        "1. Single Episode: `/episode/...`\n"
-        "2. Future-Ready Series: `/show/...` (Tracks new eps!)\n"
-        "3. Multi-Link Mode: Paste multiple `/episode/` lines at once.\n"
-        "4. App-Store Bypass: `onelink.me` links are auto-resolved!\n\n"
-        "🔄 **If Series fails:** Type `/renew` to get a 1-minute fix for Cookies."
+        "✅ **How to Use:**\n"
+        "1. **Single:** `/episode/...`\n"
+        "2. **Multi-Link (Ultimate Bypass):** Copy all episode links and paste in ONE message.\n"
+        "3. **Series:** `/show/...` (If it fails, the bot will give you the **JavaScript Copy-Paste hack** to get ALL links instantly)."
     )
 
 async def renew(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "🍪 **Cookies Renewal Guide (3 Steps):**\n\n"
+        "🍪 **Cookies Renewal Guide:**\n\n"
         "1. Open **Kiwi Browser** -> Login to `web.pocketfm.com`.\n"
         "2. Use `Get cookies.txt LOCALLY` extension to Download a **New** file.\n"
-        "3. Go to Render -> **Shell** -> **Upload** the new `cookies.txt`.\n"
+        "3. Go to Render -> **Shell** -> **Upload** new `cookies.txt`.\n"
         "4. **Restart Service** in Render.\n\n"
-        "✅ Once done, `/show/` links will work instantly!"
+        "✅ Does not bypass Render IP Block, but helps for single episodes."
     )
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text.strip()
     msg = await update.message.reply_text("🔍 Analyzing link(s)...")
+    load_cookies()
 
-    load_cookies() 
-
-    # 🔥 Smart Onelink Resolver
     if 'onelink.me' in text and 'pocketfm.com' not in text:
         await msg.edit_text("🔄 Resolving App Store redirect...")
         resolved = await asyncio.to_thread(resolve_onelink, text)
@@ -296,7 +281,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
 
     try:
-        # Multi-Link Mode
+        # 🔥 Multi-Link Mode (The ultimate bypass)
         if text.count('pocketfm.com/episode/') > 1 or '\n' in text:
             urls = [line.strip() for line in text.split('\n') if 'pocketfm.com/episode/' in line]
             if not urls:
@@ -305,40 +290,38 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await msg.edit_text(f"🚀 Found {len(urls)} links. Downloading batch...")
             for idx, url in enumerate(urls, 1):
                 await download_and_send_episode(update, context, url, ep_number=idx, total_eps=len(urls))
-            await msg.edit_text(f"✅ Batch complete!")
+            await msg.edit_text(f"✅ Batch complete! {len(urls)} files sent.")
             return
 
         # Series Mode
         elif '/show/' in text:
             url = text.split('|')[0].strip()
             await msg.edit_text("🔄 Fetching Series Data...")
-            series_title, current_eps = await asyncio.to_thread(get_series_data, url)
-            total = len(current_eps)
+            try:
+                series_title, current_eps = await asyncio.to_thread(get_series_data, url)
+                total = len(current_eps)
+                
+                tracker = load_tracker()
+                show_id = url.split('/show/')[1].strip('/')
+                old_eps = tracker.get(show_id, [])
+                new_eps = [ep for ep in current_eps if ep not in old_eps]
 
-            tracker = load_tracker()
-            show_id = url.split('/show/')[1].strip('/')
-            old_eps = tracker.get(show_id, [])
-            new_eps = [ep for ep in current_eps if ep not in old_eps]
+                if not new_eps:
+                    await msg.edit_text(f"📊 **{series_title}**\n📈 Total: {total}\n✅ Already downloaded. No new episodes.")
+                    return
 
-            if not new_eps:
-                await msg.edit_text(f"📊 **{series_title}**\n📈 Total: {total}\n✅ Already downloaded. No new episodes.")
-                return
-
-            range_match = re.search(r'\|?\s*(\d+)\s*to\s*(\d+)', text)
-            if range_match:
-                start, end = int(range_match.group(1)), int(range_match.group(2))
-                new_eps = new_eps[start-1:end]
-                await msg.edit_text(f"✅ Found {len(new_eps)} new eps (Range). Downloading...")
-            else:
                 await msg.edit_text(f"✅ Found {len(new_eps)} new eps. Downloading...")
-
-            for i, ep in enumerate(new_eps, 1):
-                await download_and_send_episode(update, context, ep, ep_number=i, total_eps=len(new_eps))
-                await asyncio.sleep(2)
-            
-            tracker[show_id] = current_eps
-            save_tracker(tracker)
-            await msg.edit_text(f"🎉 All {len(new_eps)} new episodes sent successfully!")
+                for i, ep in enumerate(new_eps, 1):
+                    await download_and_send_episode(update, context, ep, ep_number=i, total_eps=len(new_eps))
+                    await asyncio.sleep(2)
+                
+                tracker[show_id] = current_eps
+                save_tracker(tracker)
+                await msg.edit_text(f"🎉 All {len(new_eps)} new episodes sent successfully!")
+                
+            except Exception as e:
+                # The bot catches the custom error we raised and prints the JS bypass guide
+                await msg.edit_text(str(e))
             return
 
         # Single Episode
@@ -355,7 +338,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await msg.edit_text("❌ Invalid Link. Send `pocketfm.com/episode/` or `/show/`.")
 
     except Exception as e:
-        await msg.edit_text(f"❌ Error: {e}\n\n💡 **Fix:** Type `/renew` and follow the 3 steps to fix Cloudflare/Cookies.")
+        await msg.edit_text(f"❌ Unexpected Error: {e}")
 
 def run_bot():
     app = Application.builder().token(TOKEN).build()
