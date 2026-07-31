@@ -25,7 +25,6 @@ if not TOKEN:
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Global dictionary to track active downloads and user states
 active_tasks = {}
 user_pending_links = {}
 
@@ -44,7 +43,7 @@ def run_flask():
     port = int(os.environ.get('PORT', 5000))
     flask_app.run(host='0.0.0.0', port=port)
 
-# --- Downloader & Smart Series Parser Core Logic ---
+# --- Advanced Pocket FM Parser Core Logic ---
 def load_cookies(cookie_file='cookies.txt'):
     cookies = {}
     if os.path.exists(cookie_file):
@@ -72,32 +71,36 @@ def parse_pocketfm_page(url, session):
     episode_links = []
     series_name = "Pocket FM Series"
     
-    # Extract Next.js JSON data to get all episodes in the series
+    # Extract Next.js JSON data to accurately pull all episodes
     next_data_match = re.search(r'<script id="__NEXT_DATA__" type="application/json">(.*?)</script>', html_content, re.DOTALL)
     if next_data_match:
         try:
             data = json.loads(next_data_match.group(1))
-            # Safely navigate JSON structure if available
             props = data.get('props', {}).get('pageProps', {})
-            # Extract show title or series name if present
-            show_info = props.get('show', {}) or props.get('episode', {}).get('show', {})
-            if isinstance(show_info, dict) and 'title' in show_info:
-                series_name = show_info.get('title', series_name)
+            
+            # Check for show or episodes array in props
+            show_data = props.get('show', {})
+            if isinstance(show_data, dict):
+                series_name = show_data.get('title', series_name)
+                episodes_list = show_data.get('episodes', [])
+                for ep in episodes_list:
+                    ep_id = ep.get('id') or ep.get('uuid')
+                    if ep_id:
+                        episode_links.append(f"https://pocketfm.com/episode/{ep_id}")
         except Exception as e:
-            logger.error(f"JSON parse error: {e}")
+            logger.error(f"Next.js JSON parse error: {e}")
 
-    # Extract all episode links using regex fallback
-    found_urls = re.findall(r'href=["\'](https://pocketfm\.com/episode/[^"\']+)["\']', html_content)
-    if not found_urls:
-        found_urls = re.findall(r'href=["\'](/episode/[^"\']+)["\']', html_content)
-        found_urls = [f"https://pocketfm.com{ep}" for ep in found_urls]
+    # Fallback: Extract all episode links using regex if JSON traversal fails
+    if not episode_links:
+        found_urls = re.findall(r'href=["\'](https://pocketfm\.com/episode/[^"\']+)["\']', html_content)
+        if not found_urls:
+            found_urls = re.findall(r'href=["\'](/episode/[^"\']+)["\']', html_content)
+            found_urls = [f"https://pocketfm.com{ep}" for ep in found_urls]
+        
+        seen = set()
+        episode_links = [ep for ep in found_urls if not (ep in seen or seen.add(ep))]
 
-    seen = set()
-    unique_eps = [ep for ep in found_urls if not (ep in seen or seen.add(ep))]
-
-    if unique_eps:
-        episode_links = unique_eps
-    else:
+    if not episode_links:
         episode_links = [url]
 
     return episode_links, series_name
@@ -203,7 +206,6 @@ def process_m3u8(m3u8_url, session, chat_id):
                 tasks_args.append((i, seg_url, base_url, aes_key, iv, tmpdir, session))
 
             ts_files_dict = {}
-            # Super Fast Parallel Chunk Downloading (10x Speedup)
             with ThreadPoolExecutor(max_workers=10) as executor:
                 futures = [executor.submit(download_single_chunk, arg) for arg in tasks_args]
                 for future in as_completed(futures):
@@ -251,7 +253,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     welcome_text = (
         "👋 **Welcome to Pocket FM Master Bot!**\n\n"
-        "Send any Pocket FM episode or show link. I will automatically detect the total episodes and let you choose your download range!"
+        "Send any Pocket FM link. I will scan total episodes and let you choose your batch range instantly!"
     )
     if update.message:
         await update.message.reply_text(welcome_text, reply_markup=reply_markup, parse_mode="Markdown")
@@ -267,7 +269,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if data == "mode_single":
         context.user_data['mode'] = 'single'
-        await query.message.edit_text("🔗 **Single Episode Mode:**\n\nSend any Pocket FM link, and I will download it instantly!")
+        await query.message.edit_text("🔗 **Single Episode Mode:**\n\nSend any Pocket FM link to download instantly!")
     elif data == "mode_batch":
         context.user_data['mode'] = 'batch'
         keyboard = [
@@ -277,16 +279,15 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
              InlineKeyboardButton("Full Series / Unlimited", callback_data="range_all")],
             [InlineKeyboardButton("🔙 Back to Menu", callback_data="back_home")]
         ]
-        await query.message.edit_text("📚 **Batch Range Selector:**\n\nSelect how many episodes you want to download starting from your link:", reply_markup=InlineKeyboardMarkup(keyboard))
+        await query.message.edit_text("📚 **Batch Range Selector:**\n\nSelect your download range:", reply_markup=InlineKeyboardMarkup(keyboard))
     elif data.startswith("range_"):
         rng = data.split("_")[1]
         context.user_data['batch_range'] = rng
         range_label = "All Available" if rng == "all" else f"Next {rng} Episodes"
         
-        # If we have stored pending links for this user, trigger execution
         if chat_id in user_pending_links:
             url = user_pending_links[chat_id]
-            await query.message.edit_text(f"✅ **Range Set: {range_label}**\n\n🚀 Starting processing now...")
+            await query.message.edit_text(f"✅ **Range Set: {range_label}**\n\n🚀 Starting download sequence...")
             context.application.create_task(process_download_sequence(update, context, chat_id, url, rng))
         else:
             await query.message.edit_text(f"✅ **Range Set to: {range_label}**\n\nNow send your Pocket FM link!")
@@ -309,25 +310,24 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     session = requests.Session()
     session.cookies.update(load_cookies())
 
-    # Auto-detect total episodes and series info
     await update.message.reply_text("🔍 Scanning series and calculating total available episodes...")
     episode_links, series_name = parse_pocketfm_page(url, session)
     total_found = len(episode_links)
 
-    # Find current index if specific episode link was sent
     start_idx = 0
-    if url in episode_links:
-        start_idx = episode_links.index(url)
+    for idx, ep_url in enumerate(episode_links):
+        if url in ep_url or ep_url in url:
+            start_idx = idx
+            break
 
     pending_count = total_found - start_idx
 
     mode = context.user_data.get('mode', 'batch')
     if mode == 'single':
         target_urls = [url]
-        await update.message.reply_text(f"🎯 **Series:** {series_name}\n📊 **Total Released:** {total_found} Episodes\n\n🚀 Processing single episode...")
+        await update.message.reply_text(f"🎯 **Series:** {series_name}\n📊 **Total Released:** {total_found}\n\n🚀 Processing single episode...")
         context.application.create_task(execute_downloads(update, context, chat_id, target_urls))
     else:
-        # Save state and prompt range selection buttons
         user_pending_links[chat_id] = url
         context.user_data['episode_links'] = episode_links
         context.user_data['start_idx'] = start_idx
@@ -345,7 +345,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"🔢 **Total Released Episodes:** {total_found}\n"
             f"📍 **Current Episode Position:** #{start_idx + 1}\n"
             f"⏳ **Pending Episodes from here:** {pending_count}\n\n"
-            f"Please choose how many episodes you want to download:"
+            f"Please choose your download range:"
         )
         await update.message.reply_text(info_text, reply_markup=reply_markup, parse_mode="Markdown")
 
