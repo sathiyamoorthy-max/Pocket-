@@ -20,6 +20,10 @@ import m3u8
 from Crypto.Cipher import AES
 from Crypto.Util.Padding import unpad
 
+# Logging setup
+logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
+logger = logging.getLogger(__name__)
+
 # Bypass logic (cloudscraper fallback)
 try:
     import cloudscraper
@@ -34,10 +38,8 @@ TOKEN = os.environ.get("TELEGRAM_TOKEN")
 if not TOKEN:
     raise ValueError("No TELEGRAM_TOKEN found in environment variables")
 
-logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
-logger = logging.getLogger(__name__)
-
 flask_app = Flask(__name__)
+
 @flask_app.route('/')
 def index():
     return "Ultimate Bot Online!"
@@ -51,10 +53,14 @@ def run_flask():
 # ==========================================
 
 TRACKER_FILE = 'series_cache.json'
+
 def load_tracker():
     if os.path.exists(TRACKER_FILE):
-        with open(TRACKER_FILE, 'r') as f:
-            return json.load(f)
+        try:
+            with open(TRACKER_FILE, 'r') as f:
+                return json.load(f)
+        except:
+            return {}
     return {}
 
 def save_tracker(data):
@@ -228,7 +234,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     try:
-        # ✅ MULTI-LINK BATCH (Backup if Cloudflare blocks Series)
+        # ✅ MULTI-LINK BATCH
         lines = [line.strip() for line in text.split('\n') if 'pocketfm.com/episode/' in line]
         if len(lines) > 1:
             total = len(lines)
@@ -249,23 +255,19 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await msg.edit_text(f"❌ பிழை: {result}")
             return
 
-        # ✅ SERIES BATCH (Auto-Future Detection! No repetition!)
+        # ✅ SERIES BATCH
         elif '/show/' in text:
             show_id = text.split('/show/')[1].split('?')[0].strip('/')
             await msg.edit_text("🔄 சீரிஸ் டேட்டா ஸ்கேன் செய்யப்படுகிறது. Cloudflare பைபாஸ் செய்யப்படுகிறது...")
 
-            # Fetch data
             series_title, current_ids = await asyncio.to_thread(get_series_data, text)
             total_found = len(current_ids)
 
-            # Load old data
             tracker = load_tracker()
             cached_ids = tracker.get(show_id, [])
             
-            # Determine new episodes
             new_ids = [eid for eid in current_ids if eid not in cached_ids]
             
-            # *** ZERO REPETITION LOGIC ***
             if not new_ids:
                 await msg.edit_text(
                     f"📊 **{series_title}**\n"
@@ -281,7 +283,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 f"📥 இவை பேட்ச் ஆக டவுன்லோட் செய்யப்படுகின்றன..."
             )
 
-            # Download only the NEW episodes
             count = 1
             for ep_url in [f"https://pocketfm.com/episode/{eid}" for eid in new_ids]:
                 await msg.edit_text(f"📥 டவுன்லோட் செய்யப்படுகிறது {count}/{len(new_ids)}...")
@@ -289,18 +290,17 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 count += 1
                 await asyncio.sleep(2)
 
-            # Update the cache with full list for future runs
             tracker[show_id] = current_ids
             save_tracker(tracker)
 
-            await msg.edit_text(f"🎉 **பேட்ச் முழுமையடைந்தது!** {len(new_ids)} புதிய எபிசோடுகள் அனுப்பப்பட்டன. இனி அடுத்த முறை புது எபிசோட் வந்தால் மட்டும் டவுன்லோட் ஆகும்.")
+            await msg.edit_text(f"🎉 **பேட்ச் முழுமையடைந்தது!** {len(new_ids)} புதிய எபிசோடுகள் அனுப்பப்பட்டன.")
             return
 
         else:
             await msg.edit_text("❌ சரியான லிங்க் இல்லை. `/episode/` அல்லது `/show/` லிங்க் மட்டும் அனுப்பவும்.")
 
     except Exception as e:
-        await msg.edit_text(f"❌ **பிழை ஏற்பட்டுள்ளது:** {str(e)}\n\n💡 **தீர்வு:** Cloudflare பிளாக் ஆனால், ஒரே மெசேஜில் அத்தனை எபிசோட் லிங்க்களையும் (புதிய வரியில்) அனுப்பி மல்டி-லிங்க் பயன்படுத்தவும்.")
+        await msg.edit_text(f"❌ **பிழை ஏற்பட்டுள்ளது:** {str(e)}\n\n💡 **தீர்வு:** Cloudflare பிளாக் ஆனால், ஒரே மெசேஜில் அத்தனை எபிசோட் லிங்க்களையும் அனுப்பி மல்டி-Link பயன்படுத்தவும்.")
 
 def run_bot():
     app = Application.builder().token(TOKEN).build()
