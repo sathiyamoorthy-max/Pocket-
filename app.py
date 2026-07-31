@@ -28,8 +28,12 @@ import yt_dlp
 load_dotenv()
 
 # ==========================================
-# ⚡ 1. CONFIG & WORLD CLASS TLS BYPASS
+# ⚡ 1. CONFIG & PROXY SETUP (முக்கியமானது!)
 # ==========================================
+# 🔥 PROXY URL - இங்கே வேலை செய்யும் Proxy IP-யை போட்டால் 403 பிரச்சனை சரியாகிவிடும்!
+# நீங்கள் Google-ல் "free proxy list" என்று தேடி ஒரு வேகமான IP:PORT-ஐ இங்கே போடவும் (எ.கா: 'http://123.45.67.89:8080')
+PROXY_URL = None 
+
 try:
     from curl_cffi import requests as curl_requests
     CURL_AVAILABLE = True
@@ -75,15 +79,28 @@ def human_readable_size(size_bytes):
     return f"{s} {size_name[i]}"
 
 def fetch_page(url, headers=None, timeout=30):
+    proxies = {}
+    # 🔥 PROXY SETTINGS
+    if PROXY_URL:
+        proxies = {
+            'http': PROXY_URL,
+            'https': PROXY_URL
+        }
+    
     if CURL_AVAILABLE:
-        return curl_requests.get(url, impersonate="chrome133", headers=headers, timeout=timeout)
+        # curl_cffi-க்கு Proxy-ஐ பாஸ் செய்தல்
+        return curl_requests.get(url, impersonate="chrome133", headers=headers, timeout=timeout, proxies=proxies)
     else:
-        return session.get(url, headers=headers, timeout=timeout)
+        return session.get(url, headers=headers, timeout=timeout, proxies=proxies)
 
 def resolve_onelink(onelink_url):
     headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36'}
     try:
-        resp = curl_requests.get(onelink_url, impersonate="chrome133", headers=headers, allow_redirects=True, timeout=15) if CURL_AVAILABLE else requests.get(onelink_url, headers=headers, allow_redirects=True, timeout=15)
+        proxies = {}
+        if PROXY_URL:
+            proxies = {'http': PROXY_URL, 'https': PROXY_URL}
+        
+        resp = curl_requests.get(onelink_url, impersonate="chrome133", headers=headers, allow_redirects=True, timeout=15, proxies=proxies) if CURL_AVAILABLE else requests.get(onelink_url, headers=headers, allow_redirects=True, timeout=15, proxies=proxies)
         if 'pocketfm.com/show/' in resp.url or 'pocketfm.com/episode/' in resp.url:
             return resp.url
         return None
@@ -108,7 +125,7 @@ def save_tracker(data):
         json.dump(data, f)
 
 # ==========================================
-# 🔥 3. POCKET FM SERIES FETCHER (Bypass)
+# 🔥 3. POCKET FM SERIES FETCHER
 # ==========================================
 def get_series_data(series_url):
     match = re.search(r'/show/([a-zA-Z0-9_-]+)', series_url)
@@ -133,7 +150,17 @@ def get_series_data(series_url):
     
     resp = fetch_page(api_url, headers=headers, timeout=30)
     if resp.status_code == 403:
-        raise Exception("Cloudflare 403 Forbidden. IP is restricted.")
+        # 🔥 Proxy இல்லை என்றால் பைபாஸ் வழிகாட்டி!
+        raise Exception(
+            "❌ **Render IP Blocked by Cloudflare / 403 Forbidden.**\n\n"
+            "💡 **Immediate Solution (100% Bypass - No Proxy needed):**\n"
+            "1️⃣ Open this Show page in **Kiwi Browser**.\n"
+            "2️⃣ Tap `...` (Menu) -> `Developer Tools` -> `Console`.\n"
+            "3️⃣ Copy & Paste this JS code and hit Enter:\n"
+            "`document.querySelectorAll('a[href*=\"/episode/\"]').forEach(a => { if(a.href) console.log(a.href); });`\n"
+            "4️⃣ **Copy the output list** and **paste ALL links** here in ONE message. I will download them in BATCH mode!\n\n"
+            "🛠️ *Or if you want the script to auto-bypass, get a free Proxy from Google and paste it in `PROXY_URL` inside the script.*"
+        )
 
     html = resp.text
     title_match = re.search(r'<meta property="og:title" content="([^"]+)"', html)
@@ -240,7 +267,7 @@ def get_episode_metadata(episode_url):
     
     resp = fetch_page(episode_url, headers=headers, timeout=20)
     if resp.status_code == 403:
-        raise Exception("Cloudflare 403 Forbidden. IP is restricted.")
+        raise Exception("Cloudflare 403 Forbidden. IP or Proxy is restricted.")
         
     html = resp.text
     title = re.search(r'<meta property="og:title" content="([^"]+)"', html)
@@ -423,7 +450,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             # Series Mode
             elif '/show/' in text:
                 url = text.split('|')[0].strip()
-                await msg.edit_text("🔄 Bypassing Cloudflare TLS Fingerprint & Fetching Series...")
+                await msg.edit_text("🔄 Bypassing Cloudflare & Fetching Series...")
                 series_title, current_eps = await asyncio.to_thread(get_series_data, url)
                 total = len(current_eps)
                 
