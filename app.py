@@ -40,7 +40,6 @@ def get_episode_data(episode_url):
     response = requests.get(episode_url, headers=headers, timeout=20)
     html_content = response.text
     
-    # Extract Title & Series Name
     title_match = re.search(r'<meta property="og:title" content="([^"]+)"', html_content)
     raw_title = title_match.group(1) if title_match else "Pocket FM Audio"
     series_name = "Pocket FM"
@@ -50,11 +49,9 @@ def get_episode_data(episode_url):
         episode_title = parts[0].strip()
         series_name = parts[1].strip()
         
-    # Extract Thumbnail
     img_match = re.search(r'<meta property="og:image" content="([^"]+)"', html_content)
     thumbnail_url = img_match.group(1) if img_match else None
     
-    # Extract m3u8 link
     m3u8_match = re.search(r'(https?://[^\s"\'<>]+\.cloudfront\.net[^\s"\'<>]*?\.m3u8[^\s"\'<>]*)', html_content)
     if not m3u8_match:
         m3u8_match = re.search(r'(https?://[^\s"\'<>]+\.m3u8[^\s"\'<>]*)', html_content)
@@ -124,8 +121,10 @@ def download_audio(m3u8_url):
                     
         ts_files = [ts_files_dict[i] for i in sorted(ts_files_dict.keys())]
         
+        if not os.path.exists('downloads'):
+            os.makedirs('downloads')
+            
         unique_name = str(uuid.uuid4())[:8]
-        if not os.path.exists('downloads'): os.makedirs('downloads')
         output_file = f"downloads/audio_{unique_name}.mp3"
         list_path = os.path.join(tmpdir, "list.txt")
         
@@ -151,14 +150,24 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         m3u8_url, title, series, thumb_url = await asyncio.to_thread(get_episode_data, url)
         
+        # --- இதுதான் நான் மிஸ் பண்ணிய அந்த வரி! (THE FIX) ---
+        if not os.path.exists('downloads'):
+            os.makedirs('downloads')
+        # ---------------------------------------------------
+        
         if thumb_url:
             unique_id = str(uuid.uuid4())[:8]
             thumb_path = f"downloads/thumb_{unique_id}.jpg"
-            img_data = requests.get(thumb_url).content
-            with open(thumb_path, 'wb') as f: f.write(img_data)
-            im = Image.open(thumb_path).convert('RGB')
-            im.thumbnail((320, 320))
-            im.save(thumb_path, 'JPEG')
+            try:
+                img_data = requests.get(thumb_url).content
+                with open(thumb_path, 'wb') as f: 
+                    f.write(img_data)
+                im = Image.open(thumb_path).convert('RGB')
+                im.thumbnail((320, 320))
+                im.save(thumb_path, 'JPEG')
+            except Exception as e:
+                logger.error(f"Thumbnail error: {e}")
+                thumb_path = None
             
         await msg.edit_text(f"📥 Downloading Audio...\n\n**Series:** {series}\n**Episode:** {title}")
         audio_path = await asyncio.to_thread(download_audio, m3u8_url)
