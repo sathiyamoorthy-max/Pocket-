@@ -40,7 +40,7 @@ logger = logging.getLogger(__name__)
 flask_app = Flask(__name__)
 @flask_app.route('/')
 def index():
-    return "Pocket FM Bot is Online and Running!"
+    return "Pocket FM Stable Bot is Online!"
 
 def run_flask():
     port = int(os.environ.get('PORT', 5000))
@@ -86,7 +86,8 @@ def load_tracker():
     return {}
 
 def save_tracker(data):
-    with open(TRACKER_FILE, 'w') as f: json.dump(data, f)
+    with open(TRACKER_FILE, 'w') as f:
+        json.dump(data, f)
 
 # ==========================================
 # 🔥 POCKET FM SERIES FETCHER
@@ -99,14 +100,14 @@ def get_series_data(series_url):
     
     resp = session.get(api_url, headers=HEADERS, timeout=30)
     if resp.status_code != 200:
-        raise Exception(f"Failed to fetch show page (Status: {resp.status_code})")
+        raise Exception(f"Failed to fetch show page. Status code: {resp.status_code}")
 
     html = resp.text
     title_match = re.search(r'<meta property="og:title" content="([^"]+)"', html)
     series_title = title_match.group(1).split("|")[0].strip() if title_match else "Pocket FM Series"
     
     json_match = re.search(r'<script id="__NEXT_DATA__" type="application/json">(.*?)</script>', html, re.DOTALL)
-    if not json_match: raise Exception("Could not extract JSON data.")
+    if not json_match: raise Exception("Could not extract JSON payload.")
     
     data = json.loads(json_match.group(1))
     episodes_map = []
@@ -124,7 +125,7 @@ def get_series_data(series_url):
     unique_episodes = {ep['url']: ep for ep in episodes_map}.values()
     ep_list = list(unique_episodes)
     
-    if not ep_list: raise Exception("Episodes not found inside JSON.")
+    if not ep_list: raise Exception("Episodes not found inside JSON structure.")
     return series_title, [ep['url'] for ep in ep_list]
 
 # ==========================================
@@ -139,9 +140,6 @@ def download_chunk(args):
         response = session.get(full_url, headers=HEADERS, timeout=20, stream=True)
         data = response.content
         
-        if b'<html' in data[:100].lower():
-            return i, None
-            
         if aes_key and iv:
             iv_bytes = bytes.fromhex(iv.replace('0x', '')) if isinstance(iv, str) else iv
             iv_bytes = iv_bytes.ljust(16, b'\0')
@@ -195,27 +193,13 @@ def download_audio_from_m3u8(m3u8_url):
         with open(list_path, 'w') as f:
             for ts in ts_files: f.write(f"file '{ts}'\n")
             
-        result = subprocess.run(
-            ['ffmpeg', '-y', '-f', 'concat', '-safe', '0', '-i', list_path, '-c:a', 'libmp3lame', '-q:a', '2', output_file],
-            capture_output=True, text=True
-        )
-        
-        if result.returncode != 0:
-            output_file_ts = output_file.replace('.mp3', '.ts')
-            fallback = subprocess.run(
-                ['ffmpeg', '-y', '-f', 'concat', '-safe', '0', '-i', list_path, '-c', 'copy', output_file_ts],
-                capture_output=True, text=True
-            )
-            if fallback.returncode != 0:
-                raise Exception("FFmpeg conversion failed.")
-            return output_file_ts
-            
+        subprocess.run(['ffmpeg', '-y', '-f', 'concat', '-safe', '0', '-i', list_path, '-c:a', 'libmp3lame', '-q:a', '2', output_file], check=True, capture_output=True)
         return output_file
 
 def get_episode_metadata(episode_url):
     resp = session.get(episode_url, headers=HEADERS, timeout=20)
     if resp.status_code != 200:
-        raise Exception(f"Failed to fetch episode page (Status: {resp.status_code})")
+        raise Exception(f"Failed to fetch episode page. Status: {resp.status_code}")
         
     html = resp.text
     title = re.search(r'<meta property="og:title" content="([^"]+)"', html)
@@ -225,7 +209,6 @@ def get_episode_metadata(episode_url):
         m3u8 = re.search(r'(https?://[^\s"\'<>]+\.m3u8[^\s"\'<>]*)', html)
     if not m3u8:
         raise Exception("M3U8 Stream not found.")
-        
     ep_title = title.group(1).split("|")[0].strip() if title else "Episode"
     return m3u8.group(1), ep_title, img.group(1) if img else None
 
@@ -268,14 +251,14 @@ async def download_and_send_episode(update, context, ep_url, ep_number=None, tot
 # 🤖 TELEGRAM HANDLERS
 # ==========================================
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    msg = f"👋 Hello {update.effective_user.first_name}!\n\nWelcome to *Pocket FM Downloader Bot*!\nSend any Pocket FM link.\n\nPowered by {WATERMARK}"
+    msg = f"👋 Hello {update.effective_user.first_name}!\n\nWelcome to *Pocket FM Stable Bot*!\nSend any Pocket FM link.\n\nPowered by {WATERMARK}"
     await update.message.reply_text(msg, parse_mode="Markdown")
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text.strip()
     
     if 'onelink.me' in text and 'pocketfm.com' not in text:
-        msg = await update.message.reply_text("🔄 Resolving link...")
+        msg = await update.message.reply_text("🔄 Resolving...")
         resolved = await asyncio.to_thread(resolve_onelink, text)
         if not resolved:
             return await msg.edit_text("❌ Could not resolve link.")
@@ -283,11 +266,11 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await msg.edit_text(f"✅ Resolved to: `{text}`")
 
     if 'pocketfm.com' in text:
-        msg = await update.message.reply_text("🔍 Processing link...")
+        msg = await update.message.reply_text("🔍 Processing...")
         try:
             if text.count('pocketfm.com/episode/') > 1 or '\n' in text:
                 urls = [line.strip() for line in text.split('\n') if 'pocketfm.com/episode/' in line]
-                if not urls: return await msg.edit_text("❌ No valid links found.")
+                if not urls: return await msg.edit_text("❌ No valid links.")
                 await msg.edit_text(f"🚀 Found {len(urls)} links. Downloading batch...")
                 for idx, url in enumerate(urls, 1):
                     await download_and_send_episode(update, context, url, ep_number=idx, total_eps=len(urls))
