@@ -4,8 +4,3 @@ requests
 Pillow
 m3u8
 pycryptodome
-flask
-python-telegram-bot
-yt-dlp
-Pillow
-requests
