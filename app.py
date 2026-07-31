@@ -28,102 +28,55 @@ flask_app = Flask(__name__)
 
 @flask_app.route('/')
 def index():
-    return "Bot is running perfectly!"
+    return "Bot is running with Ultimate Hybrid Features!"
 
 def run_flask():
     port = int(os.environ.get('PORT', 5000))
     flask_app.run(host='0.0.0.0', port=port)
 
 # ==========================================
-# 🔥 BATCH DOWNLOADER CORE LOGIC (THE FIX)
+# 🔥 ADVANCED BATCH DOWNLOADER
 # ==========================================
 
-def get_all_episode_links(series_url):
-    headers = {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36'
-    }
-    try:
-        response = requests.get(series_url, headers=headers, timeout=30)
-        html = response.text
-
-        # 1. __NEXT_DATA__ JSON-ஐ கண்டுபிடித்தல்
-        next_data_match = re.search(r'<script id="__NEXT_DATA__" type="application/json">(.*?)</script>', html, re.DOTALL)
-        if not next_data_match:
-            raise Exception("Could not find Next.js Data. Pocket FM might have updated their structure.")
-
-        json_data = json.loads(next_data_match.group(1))
-
-        # 2. JSON-க்குள் மறைந்திருக்கும் Episode List-ஐ கண்டுபிடிக்க ஒரு ரிகர்சிவ் ஃபங்ஷன்
-        def extract_episode_urls(data):
-            urls = []
-            if isinstance(data, dict):
-                # Show ID மற்றும் Episodes அரே-ஐ தேடுதல்
-                if 'episodeId' in data:
-                    episode_id = data.get('episodeId')
-                    if episode_id:
-                        urls.append(f"https://pocketfm.com/episode/{episode_id}")
-                
-                for key, value in data.items():
-                    if key in ['episodeId', 'id'] and isinstance(value, str) and len(value) > 10:
-                        urls.append(f"https://pocketfm.com/episode/{value}")
-                    else:
-                        urls.extend(extract_episode_urls(value))
-            elif isinstance(data, list):
-                for item in data:
-                    urls.extend(extract_episode_urls(item))
-            return urls
-
-        # 3. நகல் எபிசோட்களை நீக்கி, தனித்துவமான (Unique) லிங்க்களை மட்டும் எடுத்தல்
-        all_urls = list(set(extract_episode_urls(json_data)))
-        
-        # 4. Series-ன் டைட்டிலை தேடுதல்
-        series_title = "Pocket FM Series"
-        title_match = re.search(r'<meta property="og:title" content="([^"]+)"', html)
-        if title_match:
-            series_title = title_match.group(1)
-
-        if not all_urls:
-            raise Exception("No episodes found in JSON data.")
-            
-        logger.info(f"Found {len(all_urls)} episodes for series: {series_title}")
-        return series_title, sorted(all_urls)
-
-    except Exception as e:
-        logger.error(f"Error scraping JSON: {e}")
-        raise e
-
-def get_episode_data(episode_url):
-    headers = {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36'
-    }
-    try:
-        response = requests.get(episode_url, headers=headers, timeout=20)
-        html_content = response.text
-    except:
-        raise Exception(f"Network error fetching: {episode_url}")
-
-    title_match = re.search(r'<meta property="og:title" content="([^"]+)"', html_content)
-    raw_title = title_match.group(1) if title_match else "Pocket FM Audio"
+def extract_episodes_from_json(json_data, series_url):
+    episodes = []
+    if isinstance(json_data, dict):
+        if 'episodeId' in json_data and json_data['episodeId']:
+            episodes.append(f"https://pocketfm.com/episode/{json_data['episodeId']}")
+        for key, value in json_data.items():
+            if key in ['episodeId', 'id'] and isinstance(value, str) and len(value) > 10:
+                episodes.append(f"https://pocketfm.com/episode/{value}")
+            else:
+                episodes.extend(extract_episodes_from_json(value, series_url))
+    elif isinstance(json_data, list):
+        for item in json_data:
+            episodes.extend(extract_episodes_from_json(item, series_url))
     
-    series_name = "Pocket FM"
-    episode_title = raw_title
-    if "|" in raw_title:
-        parts = raw_title.split("|")
-        episode_title = parts[0].strip()
-        series_name = parts[1].strip()
-        
-    img_match = re.search(r'<meta property="og:image" content="([^"]+)"', html_content)
-    thumbnail_url = img_match.group(1) if img_match else None
+    # 💡 வரிசை மாறாமல் Duplicate-ஐ நீக்கும் மேஜிக்!
+    return list(dict.fromkeys(episodes))
+
+def get_series_data(series_url):
+    # 💡 Cloudflare-ஐ ஏமாற்ற மேம்படுத்தப்பட்ட Headers
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
+        'Accept-Language': 'en-US,en;q=0.5',
+        'Connection': 'keep-alive',
+        'Upgrade-Insecure-Requests': '1',
+    }
+    resp = requests.get(series_url, headers=headers, timeout=30)
+    html = resp.text
     
-    m3u8_match = re.search(r'(https?://[^\s"\'<>]+\.cloudfront\.net[^\s"\'<>]*?\.m3u8[^\s"\'<>]*)', html_content)
-    if not m3u8_match:
-        m3u8_match = re.search(r'(https?://[^\s"\'<>]+\.m3u8[^\s"\'<>]*)', html_content)
-        
-    if m3u8_match:
-        m3u8_url = m3u8_match.group(1).replace('\\/', '/').replace('\\u002F', '/')
-        return m3u8_url, episode_title, series_name, thumbnail_url
-    else:
-        raise Exception(f"M3U8 not found for {episode_url}")
+    title_match = re.search(r'<meta property="og:title" content="([^"]+)"', html)
+    series_title = title_match.group(1).split("|")[0].strip() if title_match else "Pocket FM Series"
+
+    json_match = re.search(r'<script id="__NEXT_DATA__" type="application/json">(.*?)</script>', html, re.DOTALL)
+    if not json_match:
+        raise Exception("Cloudflare blocked the request or Next.js Data is missing. Try Multi-Link Mode.")
+    
+    data = json.loads(json_match.group(1))
+    all_episodes = extract_episodes_from_json(data, series_url)
+    return series_title, all_episodes
 
 def download_chunk(args):
     i, seg_url, base_url, aes_key, iv, tmpdir = args
@@ -151,7 +104,7 @@ def download_chunk(args):
     except:
         return i, None
 
-def download_audio(m3u8_url):
+def download_audio_from_m3u8(m3u8_url):
     playlist = m3u8.load(m3u8_url)
     base_url = '/'.join(m3u8_url.split('/')[:-1])
     
@@ -197,120 +150,138 @@ def download_audio(m3u8_url):
         subprocess.run(['ffmpeg', '-y', '-f', 'concat', '-safe', '0', '-i', list_path, '-c:a', 'libmp3lame', '-q:a', '2', output_file], check=True, capture_output=True)
         return output_file
 
+def get_episode_metadata(episode_url):
+    headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36'}
+    resp = requests.get(episode_url, headers=headers, timeout=20)
+    html = resp.text
+    
+    title = re.search(r'<meta property="og:title" content="([^"]+)"', html)
+    img = re.search(r'<meta property="og:image" content="([^"]+)"', html)
+    m3u8 = re.search(r'(https?://[^\s"\'<>]+\.cloudfront\.net[^\s"\'<>]*?\.m3u8[^\s"\'<>]*)', html)
+    if not m3u8:
+        m3u8 = re.search(r'(https?://[^\s"\'<>]+\.m3u8[^\s"\'<>]*)', html)
+        
+    if not m3u8:
+        raise Exception("M3U8 not found")
+        
+    ep_title = title.group(1).split("|")[0].strip() if title else "Episode"
+    return m3u8.group(1), ep_title, img.group(1) if img else None
+
+async def download_and_send_episode(update, context, ep_url, ep_number=None, total_eps=None):
+    try:
+        m3u8_url, title, thumb_url = await asyncio.to_thread(get_episode_metadata, ep_url)
+        audio_path = await asyncio.to_thread(download_audio_from_m3u8, m3u8_url)
+        
+        thumb_path = None
+        if thumb_url:
+            t_id = str(uuid.uuid4())[:8]
+            thumb_path = f"downloads/thumb_{t_id}.jpg"
+            try:
+                img_data = requests.get(thumb_url).content
+                with open(thumb_path, 'wb') as f: f.write(img_data)
+                Image.open(thumb_path).convert('RGB').thumbnail((320, 320)).save(thumb_path, 'JPEG')
+            except:
+                thumb_path = None
+
+        display_title = f"{title}"
+        if ep_number and total_eps:
+            display_title = f"[{ep_number}/{total_eps}] {title}"
+
+        with open(audio_path, 'rb') as audio:
+            thumb_file = open(thumb_path, 'rb') if thumb_path and os.path.exists(thumb_path) else None
+            await update.message.reply_audio(audio=audio, title=display_title, performer="Pocket FM", thumbnail=thumb_file)
+            if thumb_file: thumb_file.close()
+
+        if os.path.exists(audio_path): os.remove(audio_path)
+        if thumb_path and os.path.exists(thumb_path): os.remove(thumb_path)
+        return True, title
+    except Exception as e:
+        return False, str(e)
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "👋 **Advanced Pocket FM Bot**\n\n"
-        "🟢 **Single Episode:** Send a direct episode link.\n"
-        "🟡 **Batch Series:** Send the **Series Link** (e.g., `https://pocketfm.com/show/...`).\n"
-        "I will fetch all episodes from the series and send them one by one!"
+        "🚀 **Pocket FM Ultimate Bot**\n\n"
+        "📌 **Features:**\n"
+        "1. **Single Link:** `/episode/...`\n"
+        "2. **Multi-Link Mode:** Send multiple `/episode/...` links in ONE message!\n"
+        "3. **Full Series:** `/show/...`\n"
+        "4. **Range Option:** `/show/... | 1 to 10`\n\n"
+        "⚠️ **Note:** If Series link (`/show/`) gets blocked by Cloudflare, just use Multi-Link Mode!"
     )
 
-# ==========================================
-# 🚀 THE MAIN BATCH QUEUE HANDLER
-# ==========================================
-
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    url = update.message.text.strip()
-    msg = await update.message.reply_text("🔍 Analyzing link...")
+    text = update.message.text.strip()
+    msg = await update.message.reply_text("🔍 Analyzing link(s)...")
+
+    if 'onelink.me' in text:
+        await msg.edit_text("❌ **Error:** `onelink.me` links are App Store links.\nPlease get the actual `/episode/` or `/show/` link from the Share button.")
+        return
 
     try:
-        # 📌 CASE 1: பயனர் சீரிஸ் லிங்கை அனுப்பியிருந்தால் (BATCH DOWNLOAD)
-        if '/show/' in url:
-            await msg.edit_text("🔄 Scanning Series JSON Data... Please wait (this might take 30 seconds).")
-            series_title, episode_urls = await asyncio.to_thread(get_all_episode_links, url)
+        # 🟢 MULTI-LINK BATCH MODE (The Cloudflare Bypass)
+        if text.count('pocketfm.com/episode/') > 1 or '\n' in text:
+            urls = [line.strip() for line in text.split('\n') if 'pocketfm.com/episode/' in line]
+            if not urls:
+                await msg.edit_text("❌ No valid episode links found in message.")
+                return
+                
+            total = len(urls)
+            await msg.edit_text(f"🚀 **Multi-Link Batch Mode Active:** Found {total} links. Starting downloads...")
             
-            await msg.edit_text(f"✅ Found **{len(episode_urls)}** episodes for '{series_title}'.\n\n⏳ Starting Batch Download... This will be queued.")
-            
-            count = 1
-            for ep_url in episode_urls:
-                try:
-                    await msg.edit_text(f"📥 Downloading Episode {count}/{len(episode_urls)}...")
+            for idx, url in enumerate(urls, 1):
+                await msg.edit_text(f"⏳ Processing Episode {idx}/{total}...")
+                success, result = await download_and_send_episode(update, context, url, ep_number=idx, total_eps=total)
+                if not success:
+                    await update.message.reply_text(f"⚠️ Failed to download link {idx}: {result}")
                     
-                    m3u8_url, title, series, thumb_url = await asyncio.to_thread(get_episode_data, ep_url)
-                    audio_path = await asyncio.to_thread(download_audio, m3u8_url)
-                    
-                    thumb_path = None
-                    if thumb_url:
-                        unique_id = str(uuid.uuid4())[:8]
-                        thumb_path = f"downloads/thumb_{unique_id}.jpg"
-                        try:
-                            img_data = requests.get(thumb_url).content
-                            with open(thumb_path, 'wb') as f: 
-                                f.write(img_data)
-                            im = Image.open(thumb_path).convert('RGB')
-                            im.thumbnail((320, 320))
-                            im.save(thumb_path, 'JPEG')
-                        except:
-                            thumb_path = None
-
-                    with open(audio_path, 'rb') as audio:
-                        thumb_file = open(thumb_path, 'rb') if thumb_path and os.path.exists(thumb_path) else None
-                        await update.message.reply_audio(
-                            audio=audio, 
-                            title=f"Ep {count}: {title}", 
-                            performer=series_title, 
-                            thumbnail=thumb_file
-                        )
-                        if thumb_file: thumb_file.close()
-                        
-                    if os.path.exists(audio_path): os.remove(audio_path)
-                    if thumb_path and os.path.exists(thumb_path): os.remove(thumb_path)
-                    
-                    count += 1
-                    
-                except Exception as e:
-                    logger.error(f"Batch Download Error at {ep_url}: {e}")
-                    await update.message.reply_text(f"⚠️ Skipped Episode {count} due to error: {str(e)[:50]}...")
-                    count += 1
-                    continue
-            
-            await msg.edit_text(f"✅ **Batch Download Complete!** {count-1} episodes sent successfully.")
+            await msg.edit_text(f"✅ **Multi-Link Task Complete!**")
             return
 
-        # 📌 CASE 2: பயனர் ஒரு Single Episode-ஐ அனுப்பியிருந்தால்
-        elif '/episode/' in url:
-            await msg.edit_text("🚀 Processing episode...")
-            thumb_path = None
-            audio_path = None
+        # 🔵 SERIES / BATCH DOWNLOAD
+        elif '/show/' in text:
+            range_match = re.search(r'\|?\s*(\d+)\s*to\s*(\d+)', text)
+            url = text.split('|')[0].strip()
+
+            await msg.edit_text("🔄 Fetching series data... (Bypassing Security)")
+            series_title, all_episodes = await asyncio.to_thread(get_series_data, url)
+            total_found = len(all_episodes)
             
-            m3u8_url, title, series, thumb_url = await asyncio.to_thread(get_episode_data, url)
+            if range_match:
+                start_ep = int(range_match.group(1))
+                end_ep = int(range_match.group(2))
+                if start_ep > total_found:
+                    await msg.edit_text(f"❌ Range Error: Series only has {total_found} episodes.")
+                    return
+                all_episodes = all_episodes[start_ep-1:end_ep]
+                await msg.edit_text(f"✅ Found **{len(all_episodes)}** episodes (Range {start_ep}-{end_ep}). Starting download...")
+            else:
+                await msg.edit_text(f"✅ Found **{total_found}** episodes. Starting full series download...")
+
+            count = 1
+            for ep_url in all_episodes:
+                await msg.edit_text(f"📥 Downloading Episode {count}/{len(all_episodes)}...")
+                success, result = await download_and_send_episode(update, context, ep_url, ep_number=count, total_eps=len(all_episodes))
+                count += 1
+                await asyncio.sleep(2)
             
-            if not os.path.exists('downloads'):
-                os.makedirs('downloads')
-            
-            if thumb_url:
-                unique_id = str(uuid.uuid4())[:8]
-                thumb_path = f"downloads/thumb_{unique_id}.jpg"
-                try:
-                    img_data = requests.get(thumb_url).content
-                    with open(thumb_path, 'wb') as f: 
-                        f.write(img_data)
-                    im = Image.open(thumb_path).convert('RGB')
-                    im.thumbnail((320, 320))
-                    im.save(thumb_path, 'JPEG')
-                except:
-                    thumb_path = None
-                
-            await msg.edit_text(f"📥 Downloading Audio...\n\n**Series:** {series}\n**Episode:** {title}")
-            audio_path = await asyncio.to_thread(download_audio, m3u8_url)
-            
-            await msg.edit_text("📤 Uploading to Telegram...")
-            
-            with open(audio_path, 'rb') as audio:
-                thumb_file = open(thumb_path, 'rb') if thumb_path and os.path.exists(thumb_path) else None
-                await update.message.reply_audio(audio=audio, title=title, performer=series, thumbnail=thumb_file)
-                if thumb_file: thumb_file.close()
-                
-            await msg.delete()
-            
-            if os.path.exists(audio_path): os.remove(audio_path)
-            if thumb_path and os.path.exists(thumb_path): os.remove(thumb_path)
+            await msg.edit_text(f"🎉 **Batch Complete!** All {len(all_episodes)} episodes sent.")
+            return
+
+        # 🟢 SINGLE EPISODE DOWNLOAD
+        elif '/episode/' in text:
+            await msg.edit_text("⬇️ Downloading single episode...")
+            success, result = await download_and_send_episode(update, context, text)
+            if success:
+                await msg.delete()
+            else:
+                await msg.edit_text(f"❌ Failed: {result}")
+            return
 
         else:
-            await msg.edit_text("❌ Please send a valid Pocket FM Episode link (containing `/episode/`) or Series link (containing `/show/`).")
+            await msg.edit_text("❌ Invalid URL. Please send a valid `pocketfm.com` link.")
 
     except Exception as e:
-        await msg.edit_text(f"❌ Error: {e}")
+        await msg.edit_text(f"❌ Error: {str(e)}\n\n💡 Try **Multi-Link Mode** (Paste 10 single episode links at once).")
 
 def run_bot():
     app = Application.builder().token(TOKEN).build()
