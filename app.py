@@ -5,59 +5,85 @@ import logging
 import asyncio
 import uuid
 import tempfile
-import requests
 import json
+import threading
+import time
+import math
+import psutil
+from dotenv import load_dotenv
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from PIL import Image
+
+# Flask & Telegram
 from flask import Flask
-from telegram import Update
-from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, filters, ContextTypes
+
+# M3U8 & Crypto
 import m3u8
 from Crypto.Cipher import AES
 from Crypto.Util.Padding import unpad
-import threading
+import yt_dlp
 
-TOKEN = os.environ.get("TELEGRAM_TOKEN")
+load_dotenv()
+
+# ==========================================
+# ⚡ 1. CONFIG & WORLD CLASS TLS BYPASS
+# ==========================================
+try:
+    from curl_cffi import requests as curl_requests
+    CURL_AVAILABLE = True
+except ImportError:
+    CURL_AVAILABLE = False
+    import requests as curl_requests
+    import requests
+
+TOKEN = os.getenv("TELEGRAM_TOKEN") or os.getenv("TELEGRAM_BOT_TOKEN")
 if not TOKEN:
     raise ValueError("No TELEGRAM_TOKEN found in environment variables")
+
+WATERMARK = os.getenv("WATERMARK", "@UltraDownloaderBot")
 
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+if CURL_AVAILABLE:
+    logger.info("curl_cffi loaded. Cloudflare TLS Bypass is ACTIVE!")
+else:
+    logger.warning("curl_cffi not installed. Falling back to standard requests.")
+
 flask_app = Flask(__name__)
 @flask_app.route('/')
 def index():
-    return "World Class Ultimate Bot Online!"
+    return "World Class Pocket FM & Media Bot is online!"
 
 def run_flask():
     port = int(os.environ.get('PORT', 5000))
     flask_app.run(host='0.0.0.0', port=port)
 
-# ==========================================
-# 🍪 1. COOKIE SESSION SETUP
-# ==========================================
-COOKIE_FILE = 'cookies.txt'
 session = requests.Session()
+STATS = {"downloads": 0, "start_time": time.time()}
+USER_CACHE = {}
 
-def load_cookies():
-    if os.path.exists(COOKIE_FILE):
-        with open(COOKIE_FILE, 'r') as f:
-            for line in f:
-                if not line.strip() or line.startswith('#'):
-                    continue
-                parts = line.strip().split('\t')
-                if len(parts) >= 7:
-                    session.cookies.set(parts[5], parts[6])
-        return True
-    return False
+def human_readable_size(size_bytes):
+    if not size_bytes:
+        return "0B"
+    size_name = ("B", "KB", "MB", "GB", "TB")
+    i = int(math.floor(math.log(size_bytes, 1024)))
+    p = math.pow(1024, i)
+    s = round(size_bytes / p, 2)
+    return f"{s} {size_name[i]}"
 
-# ==========================================
-# 🕵️ 2. SMART ONELINK RESOLVER
-# ==========================================
+def fetch_page(url, headers=None, timeout=30):
+    if CURL_AVAILABLE:
+        return curl_requests.get(url, impersonate="chrome133", headers=headers, timeout=timeout)
+    else:
+        return session.get(url, headers=headers, timeout=timeout)
+
 def resolve_onelink(onelink_url):
-    headers = {'User-Agent': 'Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/132.0.0.0 Mobile Safari/537.36'}
+    headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36'}
     try:
-        resp = requests.get(onelink_url, headers=headers, allow_redirects=True, timeout=15)
+        resp = curl_requests.get(onelink_url, impersonate="chrome133", headers=headers, allow_redirects=True, timeout=15) if CURL_AVAILABLE else requests.get(onelink_url, headers=headers, allow_redirects=True, timeout=15)
         if 'pocketfm.com/show/' in resp.url or 'pocketfm.com/episode/' in resp.url:
             return resp.url
         return None
@@ -65,13 +91,16 @@ def resolve_onelink(onelink_url):
         return None
 
 # ==========================================
-# 📅 3. FUTURE EPISODE TRACKER (series_cache.json)
+# 📅 2. FUTURE EPISODE TRACKER
 # ==========================================
 TRACKER_FILE = 'series_cache.json'
 def load_tracker():
     if os.path.exists(TRACKER_FILE):
-        with open(TRACKER_FILE, 'r') as f:
-            return json.load(f)
+        try:
+            with open(TRACKER_FILE, 'r') as f:
+                return json.load(f)
+        except:
+            return {}
     return {}
 
 def save_tracker(data):
@@ -79,7 +108,7 @@ def save_tracker(data):
         json.dump(data, f)
 
 # ==========================================
-# 🔥 4. ADVANCED SERIES FETCHER (Mobile UA + JSON Parser)
+# 🔥 3. POCKET FM SERIES FETCHER (Bypass)
 # ==========================================
 def get_series_data(series_url):
     match = re.search(r'/show/([a-zA-Z0-9_-]+)', series_url)
@@ -88,70 +117,59 @@ def get_series_data(series_url):
     show_id = match.group(1).split('?')[0]
     api_url = f"https://pocketfm.com/show/{show_id}"
     
-    # Mobile Safari User-Agent (Render IP Block-ஐ ஓரளவு ஏமாற்ற)
     headers = {
-        'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1',
-        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
         'Accept-Language': 'en-US,en;q=0.9',
-        'Referer': series_url
+        'Referer': 'https://pocketfm.com/',
+        'Sec-Ch-Ua': '"Not(A:Brand";v="99", "Google Chrome";v="133", "Chromium";v="133"',
+        'Sec-Ch-Ua-Mobile': '?0',
+        'Sec-Ch-Ua-Platform': '"Windows"',
+        'Sec-Fetch-Dest': 'document',
+        'Sec-Fetch-Mode': 'navigate',
+        'Sec-Fetch-Site': 'same-origin',
+        'Upgrade-Insecure-Requests': '1'
     }
     
-    try:
-        load_cookies()
-        resp = session.get(api_url, headers=headers, timeout=30)
-        if resp.status_code == 403:
-            raise Exception("RENDER_IP_BLOCKED")
-            
-        html = resp.text
-        title_match = re.search(r'<meta property="og:title" content="([^"]+)"', html)
-        series_title = title_match.group(1).split("|")[0].strip() if title_match else "Pocket FM Series"
-        json_match = re.search(r'<script id="__NEXT_DATA__" type="application/json">(.*?)</script>', html, re.DOTALL)
-        if not json_match:
-            raise Exception("Could not extract Next.js JSON payload.")
-        data = json.loads(json_match.group(1))
-        
-        episodes_map = []
-        def extract_episodes(node):
-            if isinstance(node, dict):
-                ep_id = node.get('episodeId') or node.get('id')
-                if ep_id and isinstance(ep_id, str) and len(ep_id) > 10:
-                    episodes_map.append({'url': f"https://pocketfm.com/episode/{ep_id}"})
-                for k, v in node.items():
-                    extract_episodes(v)
-            elif isinstance(node, list):
-                for item in node:
-                    extract_episodes(item)
-        extract_episodes(data)
-        unique_episodes = {ep['url']: ep for ep in episodes_map}.values()
-        ep_list = list(unique_episodes)
-        if not ep_list:
-            raise Exception("Episodes not found inside JSON structure.")
-        return series_title, [ep['url'] for ep in ep_list]
-        
-    except Exception as e:
-        if str(e) == "RENDER_IP_BLOCKED":
-            # 🔥 கிவி கன்சோல் ஹேக் வழிகாட்டி
-            raise Exception(
-                "❌ **Render IP Blocked by Cloudflare. But we have a 100% bypass!**\n\n"
-                "💡 Use **'Multi-Link Bypass Mode'** to download this series:\n"
-                "1️⃣ Open this Show page in **Kiwi Browser**.\n"
-                "2️⃣ Tap `...` (Menu) -> `Developer Tools` -> `Console`.\n"
-                "3️⃣ Copy & Paste this JS code into Console and hit Enter:\n"
-                "`document.querySelectorAll('a[href*=\"/episode/\"]').forEach(a => { if(a.href) console.log(a.href); });`\n"
-                "4️⃣ Copy the output list and paste ALL links here in ONE message.\n"
-                "🎯 The bot will automatically download them all in BATCH mode!"
-            )
-        raise e
+    resp = fetch_page(api_url, headers=headers, timeout=30)
+    if resp.status_code == 403:
+        raise Exception("Cloudflare 403 Forbidden. IP is restricted.")
+
+    html = resp.text
+    title_match = re.search(r'<meta property="og:title" content="([^"]+)"', html)
+    series_title = title_match.group(1).split("|")[0].strip() if title_match else "Pocket FM Series"
+    json_match = re.search(r'<script id="__NEXT_DATA__" type="application/json">(.*?)</script>', html, re.DOTALL)
+    if not json_match:
+        raise Exception("Could not extract Next.js JSON payload.")
+    data = json.loads(json_match.group(1))
+    
+    episodes_map = []
+    def extract_episodes(node):
+        if isinstance(node, dict):
+            ep_id = node.get('episodeId') or node.get('id')
+            if ep_id and isinstance(ep_id, str) and len(ep_id) > 10:
+                episodes_map.append({'url': f"https://pocketfm.com/episode/{ep_id}"})
+            for k, v in node.items():
+                extract_episodes(v)
+        elif isinstance(node, list):
+            for item in node:
+                extract_episodes(item)
+    extract_episodes(data)
+    unique_episodes = {ep['url']: ep for ep in episodes_map}.values()
+    ep_list = list(unique_episodes)
+    if not ep_list:
+        raise Exception("Episodes not found inside JSON structure.")
+    return series_title, [ep['url'] for ep in ep_list]
 
 # ==========================================
-# 🎵 5. DOWNLOAD CORE (M3U8, AES, FFMPEG)
+# 🎵 4. DOWNLOAD CORE (M3U8, AES, FFMPEG)
 # ==========================================
 def download_chunk(args):
     i, seg_url, base_url, aes_key, iv, tmpdir = args
     try:
         full_url = seg_url if seg_url.startswith('http') else f"{base_url}/{seg_url}"
         ts_path = os.path.join(tmpdir, f"chunk_{i:04d}.ts")
-        response = session.get(full_url, stream=True, timeout=15)
+        response = requests.get(full_url, stream=True, timeout=15)
         data = response.content
         if aes_key and iv:
             iv_bytes = bytes.fromhex(iv.replace('0x', '')) if isinstance(iv, str) else iv
@@ -181,7 +199,7 @@ def download_audio_from_m3u8(m3u8_url):
         key_uri = playlist.keys[0].uri
         iv = playlist.keys[0].iv
         key_url = key_uri if key_uri.startswith('http') else f"{base_url}/{key_uri}"
-        aes_key = session.get(key_url).content
+        aes_key = requests.get(key_url).content
 
     segments = [seg.uri for seg in playlist.segments]
     with tempfile.TemporaryDirectory() as tmpdir:
@@ -206,8 +224,24 @@ def download_audio_from_m3u8(m3u8_url):
         return output_file
 
 def get_episode_metadata(episode_url):
-    headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36'}
-    resp = session.get(episode_url, headers=headers, timeout=20)
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
+        'Accept-Language': 'en-US,en;q=0.9',
+        'Referer': 'https://pocketfm.com/',
+        'Sec-Ch-Ua': '"Not(A:Brand";v="99", "Google Chrome";v="133", "Chromium";v="133"',
+        'Sec-Ch-Ua-Mobile': '?0',
+        'Sec-Ch-Ua-Platform': '"Windows"',
+        'Sec-Fetch-Dest': 'document',
+        'Sec-Fetch-Mode': 'navigate',
+        'Sec-Fetch-Site': 'same-origin',
+        'Upgrade-Insecure-Requests': '1'
+    }
+    
+    resp = fetch_page(episode_url, headers=headers, timeout=20)
+    if resp.status_code == 403:
+        raise Exception("Cloudflare 403 Forbidden. IP is restricted.")
+        
     html = resp.text
     title = re.search(r'<meta property="og:title" content="([^"]+)"', html)
     img = re.search(r'<meta property="og:image" content="([^"]+)"', html)
@@ -228,7 +262,7 @@ async def download_and_send_episode(update, context, ep_url, ep_number=None, tot
             t_id = str(uuid.uuid4())[:8]
             thumb_path = f"downloads/thumb_{t_id}.jpg"
             try:
-                img_data = session.get(thumb_url).content
+                img_data = curl_requests.get(thumb_url, impersonate="chrome133").content if CURL_AVAILABLE else requests.get(thumb_url).content
                 with open(thumb_path, 'wb') as f: f.write(img_data)
                 Image.open(thumb_path).convert('RGB').thumbnail((320, 320)).save(thumb_path, 'JPEG')
             except:
@@ -236,10 +270,14 @@ async def download_and_send_episode(update, context, ep_url, ep_number=None, tot
         display_title = f"{title}"
         if ep_number and total_eps:
             display_title = f"[{ep_number}/{total_eps}] {title}"
+        
+        chat_id = update.effective_chat.id
         with open(audio_path, 'rb') as audio:
             thumb_file = open(thumb_path, 'rb') if thumb_path and os.path.exists(thumb_path) else None
-            await update.message.reply_audio(audio=audio, title=display_title, performer="Pocket FM", thumbnail=thumb_file)
+            await context.bot.send_audio(chat_id=chat_id, audio=audio, title=display_title, performer="Pocket FM", thumbnail=thumb_file, parse_mode="Markdown")
             if thumb_file: thumb_file.close()
+
+        STATS["downloads"] += 1
         if os.path.exists(audio_path): os.remove(audio_path)
         if thumb_path and os.path.exists(thumb_path): os.remove(thumb_path)
         return True, title
@@ -247,59 +285,145 @@ async def download_and_send_episode(update, context, ep_url, ep_number=None, tot
         return False, str(e)
 
 # ==========================================
-# 🤖 6. BOT HANDLERS (START, RENEW, MESSAGE)
+# 🤖 5. TELEGRAM COMMAND HANDLERS
 # ==========================================
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(
-        "🚀 **World Class Ultimate Pocket FM Bot**\n\n"
-        "✅ **How to Use:**\n"
-        "1. **Single:** `/episode/...`\n"
-        "2. **Multi-Link (Bypass):** Copy ALL episode links and paste in ONE message.\n"
-        "3. **Series:** `/show/...` (If blocked, bot will teach you the Kiwi Console Bypass!)."
-    )
+async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user.first_name
+    msg = f"👋 Hello {user}!\n\nWelcome to *World Class Pocket FM & Media Bot*!\nSend me a Pocket FM link, or any YouTube/Twitter/Instagram link to download media.\n\nPowered by {WATERMARK}"
+    await update.message.reply_text(msg, parse_mode="Markdown")
 
-async def renew(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(
-        "🍪 **Cookies Renewal Guide:**\n\n"
-        "1. Open **Kiwi Browser** -> Login to `web.pocketfm.com`.\n"
-        "2. Use `Get cookies.txt LOCALLY` extension to Download a **New** file.\n"
-        "3. Go to Render -> **Shell** -> **Upload** new `cookies.txt`.\n"
-        "4. **Restart Service** in Render.\n\n"
-        "✅ This helps for single episodes!"
-    )
+async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    msg = (f"📌 *Help & Usage Instructions*\n\n"
+           f"1. Send any Pocket FM episode or show link.\n"
+           f"2. For series, bot automatically tracks and downloads new episodes.\n"
+           f"3. Multi-Link mode supported: Paste multiple links in one message.\n\n"
+           f"*Commands:*\n"
+           f"/start - Start Bot\n"
+           f"/help - Show Help\n"
+           f"/stats - System Statistics\n"
+           f"/settings - Configuration Options\n\n"
+           f"Channel: {WATERMARK}")
+    await update.message.reply_text(msg, parse_mode="Markdown")
+
+async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    uptime_seconds = int(time.time() - STATS["start_time"])
+    hours, remainder = divmod(uptime_seconds, 3600)
+    minutes, seconds = divmod(remainder, 60)
+    cpu = psutil.cpu_percent()
+    ram = psutil.virtual_memory().percent
+    msg = (f"📊 *Bot Statistics*\n\n"
+           f"⏱ *Uptime:* `{hours}h {minutes}m {seconds}s`\n"
+           f"📥 *Total Downloads:* `{STATS['downloads']}`\n"
+           f"💻 *CPU Usage:* `{cpu}%`\n"
+           f"🧠 *RAM Usage:* `{ram}%`")
+    await update.message.reply_text(msg, parse_mode="Markdown")
+
+async def settings_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    keyboard = [
+        [InlineKeyboardButton("Auto Caption: Enabled ✅", callback_data="toggle_caption")],
+        [InlineKeyboardButton("Watermark Footer: Enabled ✅", callback_data="toggle_watermark")]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    await update.message.reply_text("⚙️ *Bot Settings*", reply_markup=reply_markup, parse_mode="Markdown")
+
+async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    if query.data.startswith("toggle_"):
+        await query.edit_message_text("⚙️ Settings updated successfully.")
+        return
+
+    user_id = query.from_user.id
+    cache = USER_CACHE.get(user_id)
+    if not cache:
+        await query.edit_message_text("⚠️ Session expired. Please send link again.")
+        return
+
+    url = cache['url']
+    title = cache['title']
+    choice = query.data
+    await query.edit_message_text("⏳ Downloading media to server...")
+
+    out_template = f"downloads/{user_id}_%(id)s.%(ext)s"
+    ydl_opts = {'outtmpl': out_template, 'quiet': True}
+
+    if choice == "dl_best":
+        ydl_opts['format'] = 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best'
+    elif choice == "dl_720":
+        ydl_opts['format'] = 'bestvideo[height<=720][ext=mp4]+bestaudio[ext=m4a]/best[height<=720]'
+    elif choice == "dl_480":
+        ydl_opts['format'] = 'bestvideo[height<=480][ext=mp4]+bestaudio[ext=m4a]/best[height<=480]'
+    elif choice == "dl_audio":
+        ydl_opts['format'] = 'bestaudio/best'
+        ydl_opts['postprocessors'] = [{'key': 'FFmpegExtractAudio', 'preferredcodec': 'mp3', 'preferredquality': '192'}]
+
+    try:
+        loop = asyncio.get_event_loop()
+        def download():
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                info_dict = ydl.extract_info(url, download=True)
+                filename = ydl.prepare_filename(info_dict)
+                return filename, info_dict
+
+        file_path, info = await loop.run_in_executor(None, download)
+        if choice == "dl_audio" and not file_path.endswith('.mp3'):
+            file_path = os.path.splitext(file_path)[0] + ".mp3"
+
+        file_size = os.path.getsize(file_path)
+        if file_size > 50 * 1024 * 1024:
+            await query.edit_message_text(f"⚠️ File exceeds Telegram Bot 50MB size limit ({human_readable_size(file_size)}).")
+            if os.path.exists(file_path): os.remove(file_path)
+            return
+
+        await query.edit_message_text("⬆️ Uploading to Telegram...")
+        caption = f"📹 *{title}*\n\n⚡️ Downloaded via {WATERMARK}"
+        
+        with open(file_path, 'rb') as f:
+            if choice == "dl_audio":
+                await context.bot.send_audio(chat_id=query.message.chat_id, audio=f, caption=caption, parse_mode="Markdown")
+            else:
+                await context.bot.send_video(chat_id=query.message.chat_id, video=f, caption=caption, parse_mode="Markdown")
+
+        STATS["downloads"] += 1
+        await query.delete_message()
+        if os.path.exists(file_path): os.remove(file_path)
+    except Exception as e:
+        logger.error(f"Download error: {e}")
+        await query.edit_message_text(f"❌ An error occurred during processing: {e}")
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text.strip()
-    msg = await update.message.reply_text("🔍 Analyzing link(s)...")
-
+    
     if 'onelink.me' in text and 'pocketfm.com' not in text:
-        await msg.edit_text("🔄 Resolving App Store redirect...")
+        msg = await update.message.reply_text("🔄 Resolving App Store redirect...")
         resolved = await asyncio.to_thread(resolve_onelink, text)
         if resolved:
             text = resolved
-            await msg.edit_text(f"✅ Resolved to: `{text}`")
+            await msg.edit_text(f"✅ Resolved to: `{text}`", parse_mode="Markdown")
         else:
-            await msg.edit_text("❌ Could not resolve. Please get the actual `/show/` or `/episode/` link.")
+            await msg.edit_text("❌ Could not resolve link.")
             return
 
-    try:
-        # 🔥 BATCH MULTI-LINK MODE (The Ultimate Bypass)
-        if text.count('pocketfm.com/episode/') > 1 or '\n' in text:
-            urls = [line.strip() for line in text.split('\n') if 'pocketfm.com/episode/' in line]
-            if not urls:
-                await msg.edit_text("❌ No valid links found.")
+    # Check if it's Pocket FM link
+    if 'pocketfm.com' in text:
+        msg = await update.message.reply_text("🔍 Processing Pocket FM link...")
+        try:
+            # Multi-Link Mode
+            if text.count('pocketfm.com/episode/') > 1 or '\n' in text:
+                urls = [line.strip() for line in text.split('\n') if 'pocketfm.com/episode/' in line]
+                if not urls:
+                    await msg.edit_text("❌ No valid episode links found.")
+                    return
+                await msg.edit_text(f"🚀 Found {len(urls)} links. Downloading batch...")
+                for idx, url in enumerate(urls, 1):
+                    await download_and_send_episode(update, context, url, ep_number=idx, total_eps=len(urls))
+                await msg.edit_text(f"✅ Batch complete!")
                 return
-            await msg.edit_text(f"🚀 Found {len(urls)} links. Downloading batch...")
-            for idx, url in enumerate(urls, 1):
-                await download_and_send_episode(update, context, url, ep_number=idx, total_eps=len(urls))
-            await msg.edit_text(f"✅ Batch complete! {len(urls)} files sent.")
-            return
 
-        # 📺 SERIES MODE (With Smart Exception)
-        elif '/show/' in text:
-            url = text.split('|')[0].strip()
-            await msg.edit_text("🔄 Fetching Series Data...")
-            try:
+            # Series Mode
+            elif '/show/' in text:
+                url = text.split('|')[0].strip()
+                await msg.edit_text("🔄 Bypassing Cloudflare TLS Fingerprint & Fetching Series...")
                 series_title, current_eps = await asyncio.to_thread(get_series_data, url)
                 total = len(current_eps)
                 
@@ -312,7 +436,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     await msg.edit_text(f"📊 **{series_title}**\n📈 Total: {total}\n✅ Already downloaded. No new episodes.")
                     return
 
-                await msg.edit_text(f"✅ Found {len(new_eps)} new eps. Downloading...")
+                await msg.edit_text(f"✅ Found {len(new_eps)} new episodes. Downloading...")
                 for i, ep in enumerate(new_eps, 1):
                     await download_and_send_episode(update, context, ep, ep_number=i, total_eps=len(new_eps))
                     await asyncio.sleep(2)
@@ -320,35 +444,60 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 tracker[show_id] = current_eps
                 save_tracker(tracker)
                 await msg.edit_text(f"🎉 All {len(new_eps)} new episodes sent successfully!")
-                
-            except Exception as e:
-                # 🔥 போட் தானாகவே பைபாஸ் வழிகாட்டியை காண்பிக்கும்!
-                await msg.edit_text(str(e))
+                return
+
+            # Single Episode
+            elif '/episode/' in text:
+                await msg.edit_text("⬇️ Downloading Pocket FM episode...")
+                success, result = await download_and_send_episode(update, context, text)
+                if success:
+                    await msg.delete()
+                else:
+                    await msg.edit_text(f"❌ Failed: {result}")
+                return
+        except Exception as e:
+            await msg.edit_text(f"❌ Pocket FM Error: {e}")
             return
 
-        # 🎵 SINGLE EPISODE MODE
-        elif '/episode/' in text:
-            await msg.edit_text("⬇️ Downloading single episode...")
-            success, result = await download_and_send_episode(update, context, text)
-            if success:
-                await msg.delete()
-            else:
-                await msg.edit_text(f"❌ Failed: {result}")
-            return
+    # General Media Links (YouTube, Twitter, etc. via yt_dlp)
+    if text.startswith(("http://", "https://")):
+        status_msg = await update.message.reply_text("🔍 Fetching media info...")
+        try:
+            ydl_opts = {'quiet': True, 'no_warnings': True}
+            loop = asyncio.get_event_loop()
+            info = await loop.run_in_executor(None, lambda: yt_dlp.YoutubeDL(ydl_opts).extract_info(text, download=False))
+            
+            title = info.get('title', 'Media Content')
+            USER_CACHE[update.effective_user.id] = {'url': text, 'title': title}
 
-        else:
-            await msg.edit_text("❌ Invalid Link. Send `pocketfm.com/episode/` or `/show/`.")
+            keyboard = [
+                [InlineKeyboardButton("🎥 1080p / Best Video", callback_data="dl_best")],
+                [InlineKeyboardButton("🎥 720p HD", callback_data="dl_720")],
+                [InlineKeyboardButton("🎥 480p SD", callback_data="dl_480")],
+                [InlineKeyboardButton("🎵 MP3 Audio Only", callback_data="dl_audio")]
+            ]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            await status_msg.edit_text(f"🎬 *Title:* `{title}`\n\nSelect desired download format:", reply_markup=reply_markup, parse_mode="Markdown")
+        except Exception as e:
+            logger.error(f"Info extraction error: {e}")
+            await status_msg.edit_text(f"❌ Failed to extract media info. Ensure URL is supported.")
+    else:
+        await update.message.reply_text("⚠️ Please send a valid media URL.")
 
-    except Exception as e:
-        await msg.edit_text(f"❌ Unexpected Error: {e}")
-
-def run_bot():
+def main():
+    if not os.path.exists("downloads"):
+        os.makedirs("downloads")
     app = Application.builder().token(TOKEN).build()
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("renew", renew))
+    app.add_handler(CommandHandler("start", start_command))
+    app.add_handler(CommandHandler("help", help_command))
+    app.add_handler(CommandHandler("stats", stats_command))
+    app.add_handler(CommandHandler("settings", settings_command))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+    app.add_handler(CallbackQueryHandler(button_handler))
+    
+    logger.info("Bot starting...")
+    threading.Thread(target=run_flask, daemon=True).start()
     app.run_polling()
 
-if __name__ == '__main__':
-    threading.Thread(target=run_flask).start()
-    run_bot()
+if __name__ == "__main__":
+    main()
