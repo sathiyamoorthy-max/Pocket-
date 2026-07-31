@@ -19,7 +19,9 @@ from flask import Flask
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, filters, ContextTypes
 
-# M3U8, Crypto & YT-DLP
+# Cloudflare Bypass & Media
+import cloudscraper
+import requests
 import m3u8
 from Crypto.Cipher import AES
 from Crypto.Util.Padding import unpad
@@ -28,18 +30,16 @@ import yt_dlp
 load_dotenv()
 
 # ==========================================
-# ⚡ 1. CONFIG, PROXY & TLS SETUP 
+# ⚡ 1. CLOUDFLARE CLOUDSCRAPER SETUP
 # ==========================================
-PROXY_URL = None  # உங்களது Proxy IP இருந்தால் இங்கே போடலாம்
-
-import requests
-
-try:
-    from curl_cffi import requests as curl_requests
-    CURL_AVAILABLE = True
-except ImportError:
-    CURL_AVAILABLE = False
-    curl_requests = requests
+# இது கிளவுட்ஃப்ளேர் பாதுகாப்பைத் தானாக உடைக்கும் சக்திவாய்ந்த ஸ்கிராப்பர்
+scraper = cloudscraper.create_scraper(
+    browser={
+        'browser': 'chrome',
+        'platform': 'windows',
+        'desktop': True
+    }
+)
 
 TOKEN = os.getenv("TELEGRAM_TOKEN") or os.getenv("TELEGRAM_BOT_TOKEN")
 if not TOKEN:
@@ -53,22 +53,14 @@ logger = logging.getLogger(__name__)
 flask_app = Flask(__name__)
 @flask_app.route('/')
 def index():
-    return "Advanced Pocket FM Bot is Online!"
+    return "Pocket FM Ultimate Bot is Online!"
 
 def run_flask():
     port = int(os.environ.get('PORT', 5000))
     flask_app.run(host='0.0.0.0', port=port)
 
-session = requests.Session()
 STATS = {"downloads": 0, "start_time": time.time()}
 USER_CACHE = {}
-
-# 🌐 UNIVERSAL HEADERS
-BASE_HEADERS = {
-    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/116.0.0.0 Safari/537.36',
-    'Referer': 'https://pocketfm.com/',
-    'Origin': 'https://pocketfm.com'
-}
 
 def human_readable_size(size_bytes):
     if not size_bytes: return "0B"
@@ -77,23 +69,18 @@ def human_readable_size(size_bytes):
     p = math.pow(1024, i)
     return f"{round(size_bytes / p, 2)} {size_name[i]}"
 
-def fetch_page(url, headers=None, timeout=30, stream=False):
-    proxies = {'http': PROXY_URL, 'https': PROXY_URL} if PROXY_URL else None
-    req_headers = headers if headers else BASE_HEADERS
-    
-    if CURL_AVAILABLE and not stream:
-        return curl_requests.get(url, impersonate="chrome116", headers=req_headers, timeout=timeout, proxies=proxies)
-    else:
-        return session.get(url, headers=req_headers, timeout=timeout, proxies=proxies, stream=stream)
-
 def resolve_onelink(onelink_url):
     try:
-        resp = fetch_page(onelink_url, headers=BASE_HEADERS, timeout=15)
-        if 'pocketfm.com/show/' in resp.url or 'pocketfm.com/episode/' in resp.url: return resp.url
+        resp = scraper.get(onelink_url, timeout=15, allow_redirects=True)
+        if 'pocketfm.com/show/' in resp.url or 'pocketfm.com/episode/' in resp.url:
+            return resp.url
         return None
     except:
         return None
 
+# ==========================================
+# 📅 2. FUTURE EPISODE TRACKER
+# ==========================================
 TRACKER_FILE = 'series_cache.json'
 def load_tracker():
     if os.path.exists(TRACKER_FILE):
@@ -111,13 +98,12 @@ def save_tracker(data):
 def get_series_data(series_url):
     match = re.search(r'/show/([a-zA-Z0-9_-]+)', series_url)
     if not match: raise Exception("Invalid Show URL format.")
-    
     show_id = match.group(1).split('?')[0]
     api_url = f"https://pocketfm.com/show/{show_id}"
     
-    resp = fetch_page(api_url, headers=BASE_HEADERS, timeout=30)
-    if resp.status_code == 403:
-        raise Exception("❌ **IP Blocked (403 Forbidden).** Please configure PROXY_URL or use Multi-Link Bypass.")
+    resp = scraper.get(api_url, timeout=30)
+    if resp.status_code != 200:
+        raise Exception(f"Cloudflare blocked request with status code: {resp.status_code}")
 
     html = resp.text
     title_match = re.search(r'<meta property="og:title" content="([^"]+)"', html)
@@ -142,7 +128,7 @@ def get_series_data(series_url):
     unique_episodes = {ep['url']: ep for ep in episodes_map}.values()
     ep_list = list(unique_episodes)
     
-    if not ep_list: raise Exception("Episodes not found.")
+    if not ep_list: raise Exception("Episodes not found inside JSON.")
     return series_title, [ep['url'] for ep in ep_list]
 
 # ==========================================
@@ -154,15 +140,12 @@ def download_chunk(args):
         full_url = seg_url if seg_url.startswith('http') else f"{base_url}/{seg_url}"
         ts_path = os.path.join(tmpdir, f"chunk_{i:04d}.ts")
         
-        # 🔥 FIXED: Headers added to chunk downloads to prevent 403 HTML Error pages
-        response = fetch_page(full_url, headers=BASE_HEADERS, timeout=20, stream=True)
+        response = scraper.get(full_url, timeout=20, stream=True)
         data = response.content
         
-        # Safety Check: If it downloaded an HTML error page, throw error
-        if b'<html' in data[:200].lower() or b'<xml' in data[:200].lower():
-            logger.error(f"Chunk {i} blocked! Received HTML instead of Audio.")
+        if b'<html' in data[:100].lower():
             return i, None
-        
+            
         if aes_key and iv:
             iv_bytes = bytes.fromhex(iv.replace('0x', '')) if isinstance(iv, str) else iv
             iv_bytes = iv_bytes.ljust(16, b'\0')
@@ -174,19 +157,18 @@ def download_chunk(args):
         else:
             with open(ts_path, 'wb') as f: f.write(data)
         return i, ts_path
-    except Exception as e:
-        logger.error(f"Chunk {i} failed: {e}")
+    except:
         return i, None
 
 def download_audio_from_m3u8(m3u8_url):
-    m3u8_content = fetch_page(m3u8_url, headers=BASE_HEADERS, timeout=15).text
+    m3u8_content = scraper.get(m3u8_url, timeout=15).text
     playlist = m3u8.loads(m3u8_content, uri=m3u8_url)
     base_url = '/'.join(m3u8_url.split('/')[:-1])
     
     if not playlist.segments and playlist.playlists:
         m3u8_url = playlist.playlists[0].uri
         m3u8_url = m3u8_url if m3u8_url.startswith('http') else f"{base_url}/{m3u8_url}"
-        m3u8_content = fetch_page(m3u8_url, headers=BASE_HEADERS, timeout=15).text
+        m3u8_content = scraper.get(m3u8_url, timeout=15).text
         playlist = m3u8.loads(m3u8_content, uri=m3u8_url)
         base_url = '/'.join(m3u8_url.split('/')[:-1])
         
@@ -195,7 +177,7 @@ def download_audio_from_m3u8(m3u8_url):
         key_uri = playlist.keys[0].uri
         iv = playlist.keys[0].iv
         key_url = key_uri if key_uri.startswith('http') else f"{base_url}/{key_uri}"
-        aes_key = fetch_page(key_url, headers=BASE_HEADERS, timeout=15).content
+        aes_key = scraper.get(key_url, timeout=15).content
 
     segments = [seg.uri for seg in playlist.segments]
     with tempfile.TemporaryDirectory() as tmpdir:
@@ -209,39 +191,21 @@ def download_audio_from_m3u8(m3u8_url):
                 if path: ts_files_dict[idx] = path
                 
         ts_files = [ts_files_dict[i] for i in sorted(ts_files_dict.keys())]
+        if not ts_files: raise Exception("Failed to download audio chunks.")
         
-        if not ts_files:
-            raise Exception("All audio chunks failed to download! Cloudflare blocked the download IPs.")
-            
         if not os.path.exists('downloads'): os.makedirs('downloads')
         output_file = f"downloads/audio_{uuid.uuid4().hex[:8]}.mp3"
         list_path = os.path.join(tmpdir, "list.txt")
         with open(list_path, 'w') as f:
             for ts in ts_files: f.write(f"file '{ts}'\n")
             
-        # 🔥 FIXED: Advanced FFmpeg Execution with detailed Error Catching & TS Fallback
-        result = subprocess.run(
-            ['ffmpeg', '-y', '-f', 'concat', '-safe', '0', '-i', list_path, '-c:a', 'libmp3lame', '-q:a', '2', output_file],
-            capture_output=True, text=True
-        )
-        
-        if result.returncode != 0:
-            logger.warning("MP3 Encoding failed (missing libmp3lame). Falling back to direct .ts copy!")
-            output_file_ts = output_file.replace('.mp3', '.ts')
-            fallback = subprocess.run(
-                ['ffmpeg', '-y', '-f', 'concat', '-safe', '0', '-i', list_path, '-c', 'copy', output_file_ts],
-                capture_output=True, text=True
-            )
-            if fallback.returncode != 0:
-                raise Exception(f"FFMPEG Error: {fallback.stderr[-300:]}")
-            return output_file_ts
-            
+        subprocess.run(['ffmpeg', '-y', '-f', 'concat', '-safe', '0', '-i', list_path, '-c:a', 'libmp3lame', '-q:a', '2', output_file], check=True, capture_output=True)
         return output_file
 
 def get_episode_metadata(episode_url):
-    resp = fetch_page(episode_url, headers=BASE_HEADERS, timeout=20)
-    if resp.status_code == 403:
-        raise Exception("Cloudflare 403 Forbidden. IP is restricted.")
+    resp = scraper.get(episode_url, timeout=20)
+    if resp.status_code != 200:
+        raise Exception(f"Failed to fetch episode page, status: {resp.status_code}")
         
     html = resp.text
     title = re.search(r'<meta property="og:title" content="([^"]+)"', html)
@@ -250,8 +214,7 @@ def get_episode_metadata(episode_url):
     if not m3u8:
         m3u8 = re.search(r'(https?://[^\s"\'<>]+\.m3u8[^\s"\'<>]*)', html)
     if not m3u8:
-        raise Exception("M3U8 Stream not found. Content might be premium.")
-        
+        raise Exception("M3U8 Stream not found")
     ep_title = title.group(1).split("|")[0].strip() if title else "Episode"
     return m3u8.group(1), ep_title, img.group(1) if img else None
 
@@ -264,7 +227,7 @@ async def download_and_send_episode(update, context, ep_url, ep_number=None, tot
         if thumb_url:
             thumb_path = f"downloads/thumb_{uuid.uuid4().hex[:8]}.jpg"
             try:
-                img_data = fetch_page(thumb_url, headers=BASE_HEADERS, timeout=15).content
+                img_data = scraper.get(thumb_url, timeout=15).content
                 with open(thumb_path, 'wb') as f: f.write(img_data)
                 Image.open(thumb_path).convert('RGB').thumbnail((320, 320)).save(thumb_path, 'JPEG')
             except:
@@ -287,73 +250,21 @@ async def download_and_send_episode(update, context, ep_url, ep_number=None, tot
         if thumb_path and os.path.exists(thumb_path): os.remove(thumb_path)
         return True, title
     except Exception as e:
-        logger.error(f"Download Pipeline Error: {e}")
+        logger.error(f"Download Error: {e}")
         return False, str(e)
 
 # ==========================================
 # 🤖 5. TELEGRAM HANDLERS
 # ==========================================
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    msg = f"👋 Hello {update.effective_user.first_name}!\n\nWelcome to *Advanced Media Downloader Bot*!\nSend any Pocket FM, YouTube, Twitter link.\n\nPowered by {WATERMARK}"
+    msg = f"👋 Hello {update.effective_user.first_name}!\n\nWelcome to *Pocket FM Cloudscraper Bot*!\nSend any Pocket FM link.\n\nPowered by {WATERMARK}"
     await update.message.reply_text(msg, parse_mode="Markdown")
-
-async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    if query.data.startswith("toggle_"): return
-
-    user_id = query.from_user.id
-    cache = USER_CACHE.get(user_id)
-    if not cache:
-        await query.message.edit_text("⚠️ Session expired. Please send link again.")
-        return
-
-    url, title, choice = cache['url'], cache['title'], query.data
-    await query.message.edit_text("⏳ Downloading media to server...")
-
-    ydl_opts = {'outtmpl': f"downloads/{user_id}_%(id)s.%(ext)s", 'quiet': True}
-    if PROXY_URL: ydl_opts['proxy'] = PROXY_URL
-    
-    if choice == "dl_best": ydl_opts['format'] = 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best'
-    elif choice == "dl_720": ydl_opts['format'] = 'bestvideo[height<=720][ext=mp4]+bestaudio[ext=m4a]/best'
-    elif choice == "dl_audio":
-        ydl_opts['format'] = 'bestaudio/best'
-        ydl_opts['postprocessors'] = [{'key': 'FFmpegExtractAudio', 'preferredcodec': 'mp3'}]
-
-    try:
-        loop = asyncio.get_event_loop()
-        def download_yt():
-            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                info_dict = ydl.extract_info(url, download=True)
-                return ydl.prepare_filename(info_dict)
-
-        file_path = await loop.run_in_executor(None, download_yt)
-        if choice == "dl_audio" and not file_path.endswith('.mp3'):
-            file_path = os.path.splitext(file_path)[0] + ".mp3"
-
-        if os.path.getsize(file_path) > 50 * 1024 * 1024:
-            await query.message.edit_text("⚠️ File exceeds Telegram's 50MB limit.")
-            os.remove(file_path)
-            return
-
-        await query.message.edit_text("⬆️ Uploading to Telegram...")
-        with open(file_path, 'rb') as f:
-            if choice == "dl_audio":
-                await context.bot.send_audio(chat_id=query.message.chat_id, audio=f, caption=title, read_timeout=120, write_timeout=120)
-            else:
-                await context.bot.send_video(chat_id=query.message.chat_id, video=f, caption=title, read_timeout=120, write_timeout=120)
-
-        STATS["downloads"] += 1
-        await query.message.delete()
-        os.remove(file_path)
-    except Exception as e:
-        await query.message.edit_text(f"❌ Error: {str(e)}")
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text.strip()
     
     if 'onelink.me' in text and 'pocketfm.com' not in text:
-        msg = await update.message.reply_text("🔄 Resolving App Store redirect...")
+        msg = await update.message.reply_text("🔄 Resolving...")
         resolved = await asyncio.to_thread(resolve_onelink, text)
         if not resolved:
             return await msg.edit_text("❌ Could not resolve link.")
@@ -361,7 +272,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await msg.edit_text(f"✅ Resolved to: `{text}`")
 
     if 'pocketfm.com' in text:
-        msg = await update.message.reply_text("🔍 Processing Pocket FM link...")
+        msg = await update.message.reply_text("🔍 Processing...")
         try:
             if text.count('pocketfm.com/episode/') > 1 or '\n' in text:
                 urls = [line.strip() for line in text.split('\n') if 'pocketfm.com/episode/' in line]
@@ -400,32 +311,25 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except Exception as e:
             return await msg.edit_text(f"❌ Pocket FM Error: {e}")
 
-    # General Media
+    # General Media via yt_dlp
     if text.startswith(("http://", "https://")):
         status_msg = await update.message.reply_text("🔍 Fetching media info...")
         try:
             ydl_opts = {'quiet': True, 'no_warnings': True}
-            if PROXY_URL: ydl_opts['proxy'] = PROXY_URL
             info = await asyncio.get_event_loop().run_in_executor(None, lambda: yt_dlp.YoutubeDL(ydl_opts).extract_info(text, download=False))
-            
-            USER_CACHE[update.effective_user.id] = {'url': text, 'title': info.get('title', 'Video')}
-            keyboard = [[InlineKeyboardButton("🎥 1080p", callback_data="dl_best")],
-                        [InlineKeyboardButton("🎥 720p", callback_data="dl_720")],
-                        [InlineKeyboardButton("🎵 MP3", callback_data="dl_audio")]]
-            await status_msg.edit_text("🎬 Select format:", reply_markup=InlineKeyboardMarkup(keyboard))
+            title = info.get('title', 'Video')
+            USER_CACHE[update.effective_user.id] = {'url': text, 'title': title}
+            keyboard = [[InlineKeyboardButton("🎥 Best Video", callback_data="dl_best")],
+                        [InlineKeyboardButton("🎵 MP3 Audio", callback_data="dl_audio")]]
+            await status_msg.edit_text(f"🎬 *{title}* select format:", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
         except:
             await status_msg.edit_text("❌ Failed to extract media info.")
 
 def main():
     if not os.path.exists("downloads"): os.makedirs("downloads")
-    
-    app = Application.builder().token(TOKEN).connect_timeout(60).read_timeout(60).write_timeout(60).build()
-    
+    app = Application.builder().token(TOKEN).build()
     app.add_handler(CommandHandler("start", start_command))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-    app.add_handler(CallbackQueryHandler(button_handler))
-    
-    logger.info("Bot is booting up...")
     threading.Thread(target=run_flask, daemon=True).start()
     app.run_polling()
 
