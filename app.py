@@ -19,8 +19,7 @@ from flask import Flask
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, filters, ContextTypes
 
-# Cloudflare Bypass & Media
-import cloudscraper
+# M3U8 & Crypto
 import requests
 import m3u8
 from Crypto.Cipher import AES
@@ -28,18 +27,6 @@ from Crypto.Util.Padding import unpad
 import yt_dlp
 
 load_dotenv()
-
-# ==========================================
-# ⚡ 1. CLOUDFLARE CLOUDSCRAPER SETUP
-# ==========================================
-# இது கிளவுட்ஃப்ளேர் பாதுகாப்பைத் தானாக உடைக்கும் சக்திவாய்ந்த ஸ்கிராப்பர்
-scraper = cloudscraper.create_scraper(
-    browser={
-        'browser': 'chrome',
-        'platform': 'windows',
-        'desktop': True
-    }
-)
 
 TOKEN = os.getenv("TELEGRAM_TOKEN") or os.getenv("TELEGRAM_BOT_TOKEN")
 if not TOKEN:
@@ -53,14 +40,23 @@ logger = logging.getLogger(__name__)
 flask_app = Flask(__name__)
 @flask_app.route('/')
 def index():
-    return "Pocket FM Ultimate Bot is Online!"
+    return "Pocket FM Bot is Online and Running!"
 
 def run_flask():
     port = int(os.environ.get('PORT', 5000))
     flask_app.run(host='0.0.0.0', port=port)
 
+session = requests.Session()
 STATS = {"downloads": 0, "start_time": time.time()}
 USER_CACHE = {}
+
+# 🌐 STABLE BROWSER HEADERS
+HEADERS = {
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+    'Accept-Language': 'en-US,en;q=0.9',
+    'Referer': 'https://pocketfm.com/'
+}
 
 def human_readable_size(size_bytes):
     if not size_bytes: return "0B"
@@ -71,7 +67,7 @@ def human_readable_size(size_bytes):
 
 def resolve_onelink(onelink_url):
     try:
-        resp = scraper.get(onelink_url, timeout=15, allow_redirects=True)
+        resp = session.get(onelink_url, headers=HEADERS, timeout=15, allow_redirects=True)
         if 'pocketfm.com/show/' in resp.url or 'pocketfm.com/episode/' in resp.url:
             return resp.url
         return None
@@ -79,7 +75,7 @@ def resolve_onelink(onelink_url):
         return None
 
 # ==========================================
-# 📅 2. FUTURE EPISODE TRACKER
+# 📅 EPISODE TRACKER
 # ==========================================
 TRACKER_FILE = 'series_cache.json'
 def load_tracker():
@@ -93,7 +89,7 @@ def save_tracker(data):
     with open(TRACKER_FILE, 'w') as f: json.dump(data, f)
 
 # ==========================================
-# 🔥 3. POCKET FM SERIES FETCHER
+# 🔥 POCKET FM SERIES FETCHER
 # ==========================================
 def get_series_data(series_url):
     match = re.search(r'/show/([a-zA-Z0-9_-]+)', series_url)
@@ -101,9 +97,9 @@ def get_series_data(series_url):
     show_id = match.group(1).split('?')[0]
     api_url = f"https://pocketfm.com/show/{show_id}"
     
-    resp = scraper.get(api_url, timeout=30)
+    resp = session.get(api_url, headers=HEADERS, timeout=30)
     if resp.status_code != 200:
-        raise Exception(f"Cloudflare blocked request with status code: {resp.status_code}")
+        raise Exception(f"Failed to fetch show page (Status: {resp.status_code})")
 
     html = resp.text
     title_match = re.search(r'<meta property="og:title" content="([^"]+)"', html)
@@ -132,7 +128,7 @@ def get_series_data(series_url):
     return series_title, [ep['url'] for ep in ep_list]
 
 # ==========================================
-# 🎵 4. SECURE DOWNLOAD CORE (M3U8 & AES)
+# 🎵 DOWNLOAD CORE (M3U8, AES, FFMPEG)
 # ==========================================
 def download_chunk(args):
     i, seg_url, base_url, aes_key, iv, tmpdir = args
@@ -140,7 +136,7 @@ def download_chunk(args):
         full_url = seg_url if seg_url.startswith('http') else f"{base_url}/{seg_url}"
         ts_path = os.path.join(tmpdir, f"chunk_{i:04d}.ts")
         
-        response = scraper.get(full_url, timeout=20, stream=True)
+        response = session.get(full_url, headers=HEADERS, timeout=20, stream=True)
         data = response.content
         
         if b'<html' in data[:100].lower():
@@ -161,14 +157,14 @@ def download_chunk(args):
         return i, None
 
 def download_audio_from_m3u8(m3u8_url):
-    m3u8_content = scraper.get(m3u8_url, timeout=15).text
+    m3u8_content = session.get(m3u8_url, headers=HEADERS, timeout=15).text
     playlist = m3u8.loads(m3u8_content, uri=m3u8_url)
     base_url = '/'.join(m3u8_url.split('/')[:-1])
     
     if not playlist.segments and playlist.playlists:
         m3u8_url = playlist.playlists[0].uri
         m3u8_url = m3u8_url if m3u8_url.startswith('http') else f"{base_url}/{m3u8_url}"
-        m3u8_content = scraper.get(m3u8_url, timeout=15).text
+        m3u8_content = session.get(m3u8_url, headers=HEADERS, timeout=15).text
         playlist = m3u8.loads(m3u8_content, uri=m3u8_url)
         base_url = '/'.join(m3u8_url.split('/')[:-1])
         
@@ -177,7 +173,7 @@ def download_audio_from_m3u8(m3u8_url):
         key_uri = playlist.keys[0].uri
         iv = playlist.keys[0].iv
         key_url = key_uri if key_uri.startswith('http') else f"{base_url}/{key_uri}"
-        aes_key = scraper.get(key_url, timeout=15).content
+        aes_key = session.get(key_url, headers=HEADERS, timeout=15).content
 
     segments = [seg.uri for seg in playlist.segments]
     with tempfile.TemporaryDirectory() as tmpdir:
@@ -199,13 +195,27 @@ def download_audio_from_m3u8(m3u8_url):
         with open(list_path, 'w') as f:
             for ts in ts_files: f.write(f"file '{ts}'\n")
             
-        subprocess.run(['ffmpeg', '-y', '-f', 'concat', '-safe', '0', '-i', list_path, '-c:a', 'libmp3lame', '-q:a', '2', output_file], check=True, capture_output=True)
+        result = subprocess.run(
+            ['ffmpeg', '-y', '-f', 'concat', '-safe', '0', '-i', list_path, '-c:a', 'libmp3lame', '-q:a', '2', output_file],
+            capture_output=True, text=True
+        )
+        
+        if result.returncode != 0:
+            output_file_ts = output_file.replace('.mp3', '.ts')
+            fallback = subprocess.run(
+                ['ffmpeg', '-y', '-f', 'concat', '-safe', '0', '-i', list_path, '-c', 'copy', output_file_ts],
+                capture_output=True, text=True
+            )
+            if fallback.returncode != 0:
+                raise Exception("FFmpeg conversion failed.")
+            return output_file_ts
+            
         return output_file
 
 def get_episode_metadata(episode_url):
-    resp = scraper.get(episode_url, timeout=20)
+    resp = session.get(episode_url, headers=HEADERS, timeout=20)
     if resp.status_code != 200:
-        raise Exception(f"Failed to fetch episode page, status: {resp.status_code}")
+        raise Exception(f"Failed to fetch episode page (Status: {resp.status_code})")
         
     html = resp.text
     title = re.search(r'<meta property="og:title" content="([^"]+)"', html)
@@ -214,7 +224,8 @@ def get_episode_metadata(episode_url):
     if not m3u8:
         m3u8 = re.search(r'(https?://[^\s"\'<>]+\.m3u8[^\s"\'<>]*)', html)
     if not m3u8:
-        raise Exception("M3U8 Stream not found")
+        raise Exception("M3U8 Stream not found.")
+        
     ep_title = title.group(1).split("|")[0].strip() if title else "Episode"
     return m3u8.group(1), ep_title, img.group(1) if img else None
 
@@ -227,7 +238,7 @@ async def download_and_send_episode(update, context, ep_url, ep_number=None, tot
         if thumb_url:
             thumb_path = f"downloads/thumb_{uuid.uuid4().hex[:8]}.jpg"
             try:
-                img_data = scraper.get(thumb_url, timeout=15).content
+                img_data = session.get(thumb_url, headers=HEADERS, timeout=15).content
                 with open(thumb_path, 'wb') as f: f.write(img_data)
                 Image.open(thumb_path).convert('RGB').thumbnail((320, 320)).save(thumb_path, 'JPEG')
             except:
@@ -254,17 +265,17 @@ async def download_and_send_episode(update, context, ep_url, ep_number=None, tot
         return False, str(e)
 
 # ==========================================
-# 🤖 5. TELEGRAM HANDLERS
+# 🤖 TELEGRAM HANDLERS
 # ==========================================
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    msg = f"👋 Hello {update.effective_user.first_name}!\n\nWelcome to *Pocket FM Cloudscraper Bot*!\nSend any Pocket FM link.\n\nPowered by {WATERMARK}"
+    msg = f"👋 Hello {update.effective_user.first_name}!\n\nWelcome to *Pocket FM Downloader Bot*!\nSend any Pocket FM link.\n\nPowered by {WATERMARK}"
     await update.message.reply_text(msg, parse_mode="Markdown")
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text.strip()
     
     if 'onelink.me' in text and 'pocketfm.com' not in text:
-        msg = await update.message.reply_text("🔄 Resolving...")
+        msg = await update.message.reply_text("🔄 Resolving link...")
         resolved = await asyncio.to_thread(resolve_onelink, text)
         if not resolved:
             return await msg.edit_text("❌ Could not resolve link.")
@@ -272,11 +283,11 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await msg.edit_text(f"✅ Resolved to: `{text}`")
 
     if 'pocketfm.com' in text:
-        msg = await update.message.reply_text("🔍 Processing...")
+        msg = await update.message.reply_text("🔍 Processing link...")
         try:
             if text.count('pocketfm.com/episode/') > 1 or '\n' in text:
                 urls = [line.strip() for line in text.split('\n') if 'pocketfm.com/episode/' in line]
-                if not urls: return await msg.edit_text("❌ No valid links.")
+                if not urls: return await msg.edit_text("❌ No valid links found.")
                 await msg.edit_text(f"🚀 Found {len(urls)} links. Downloading batch...")
                 for idx, url in enumerate(urls, 1):
                     await download_and_send_episode(update, context, url, ep_number=idx, total_eps=len(urls))
