@@ -25,8 +25,9 @@ if not TOKEN:
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Global dictionary to track active downloads and cancellation flags
+# Global dictionary to track active downloads and user states
 active_tasks = {}
+user_pending_links = {}
 
 # --- Flask App (Health check for Render) ---
 flask_app = Flask(__name__)
@@ -59,50 +60,47 @@ def load_cookies(cookie_file='cookies.txt'):
         logger.warning("cookies.txt file not found! Download might fail.")
     return cookies
 
-def extract_series_or_episode_links(url, session, limit_count):
+def parse_pocketfm_page(url, session):
     headers = {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36',
         'Referer': 'https://pocketfm.com/'
     }
-    logger.info(f"Parsing URL: {url}")
+    logger.info(f"Fetching page: {url}")
     response = session.get(url, headers=headers, timeout=20)
     html_content = response.text
     
-    # Try to extract Next.js data JSON for robust episode listing
     episode_links = []
     series_name = "Pocket FM Series"
     
+    # Extract Next.js JSON data to get all episodes in the series
     next_data_match = re.search(r'<script id="__NEXT_DATA__" type="application/json">(.*?)</script>', html_content, re.DOTALL)
     if next_data_match:
         try:
             data = json.loads(next_data_match.group(1))
-            # Traverse typical Pocket FM next data structure to find episodes
-            # Fallback to regex if specific json path varies
+            # Safely navigate JSON structure if available
+            props = data.get('props', {}).get('pageProps', {})
+            # Extract show title or series name if present
+            show_info = props.get('show', {}) or props.get('episode', {}).get('show', {})
+            if isinstance(show_info, dict) and 'title' in show_info:
+                series_name = show_info.get('title', series_name)
         except Exception as e:
             logger.error(f"JSON parse error: {e}")
 
-    # Fallback regex to find all episode links on the page if it's a show page
+    # Extract all episode links using regex fallback
     found_urls = re.findall(r'href=["\'](https://pocketfm\.com/episode/[^"\']+)["\']', html_content)
     if not found_urls:
         found_urls = re.findall(r'href=["\'](/episode/[^"\']+)["\']', html_content)
         found_urls = [f"https://pocketfm.com{ep}" for ep in found_urls]
 
-    # Deduplicate while preserving order
     seen = set()
     unique_eps = [ep for ep in found_urls if not (ep in seen or seen.add(ep))]
 
     if unique_eps:
         episode_links = unique_eps
     else:
-        # If no list found, treat the input URL as a single episode
         episode_links = [url]
 
-    # Apply batch limit
-    if limit_count != 'all' and limit_count.isdigit():
-        limit = int(limit_count)
-        episode_links = episode_links[:limit]
-    
-    return episode_links
+    return episode_links, series_name
 
 def get_episode_metadata_and_m3u8(episode_url, session):
     headers = {
@@ -205,7 +203,7 @@ def process_m3u8(m3u8_url, session, chat_id):
                 tasks_args.append((i, seg_url, base_url, aes_key, iv, tmpdir, session))
 
             ts_files_dict = {}
-            # Super Fast Parallel Chunk Downloading using ThreadPoolExecutor (10x Speedup)
+            # Super Fast Parallel Chunk Downloading (10x Speedup)
             with ThreadPoolExecutor(max_workers=10) as executor:
                 futures = [executor.submit(download_single_chunk, arg) for arg in tasks_args]
                 for future in as_completed(futures):
@@ -245,15 +243,15 @@ def download_episode(url, chat_id):
 # --- Telegram Bot UI & Handlers ---
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = [
-        [InlineKeyboardButton("📥 Single Episode", callback_data="single_menu"),
-         InlineKeyboardButton("📚 Batch Series Download", callback_data="batch_menu")],
+        [InlineKeyboardButton("📥 Single Episode", callback_data="mode_single"),
+         InlineKeyboardButton("📚 Batch Series Download", callback_data="mode_batch")],
         [InlineKeyboardButton("🛑 Stop Active Download", callback_data="stop_download")]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
     
     welcome_text = (
         "👋 **Welcome to Pocket FM Master Bot!**\n\n"
-        "Choose an option below or send any Pocket FM link to start lightning-fast downloading with title, series name, and thumbnail!"
+        "Send any Pocket FM episode or show link. I will automatically detect the total episodes and let you choose your download range!"
     )
     if update.message:
         await update.message.reply_text(welcome_text, reply_markup=reply_markup, parse_mode="Markdown")
@@ -264,27 +262,38 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     
-    if query.data == "single_menu":
-        context.user_data['batch_limit'] = '1'
-        await query.message.edit_text("🔗 **Single Episode Mode:**\n\nSimply send the direct Pocket FM episode link here, and I will download it instantly!")
-    elif query.data == "batch_menu":
+    data = query.data
+    chat_id = query.message.chat_id
+
+    if data == "mode_single":
+        context.user_data['mode'] = 'single'
+        await query.message.edit_text("🔗 **Single Episode Mode:**\n\nSend any Pocket FM link, and I will download it instantly!")
+    elif data == "mode_batch":
+        context.user_data['mode'] = 'batch'
         keyboard = [
-            [InlineKeyboardButton("10 Episodes", callback_data="batch_10"),
-             InlineKeyboardButton("20 Episodes", callback_data="batch_20")],
-            [InlineKeyboardButton("50 Episodes", callback_data="batch_50"),
-             InlineKeyboardButton("All / Unlimited", callback_data="batch_all")],
+            [InlineKeyboardButton("Next 10 Episodes", callback_data="range_10"),
+             InlineKeyboardButton("Next 20 Episodes", callback_data="range_20")],
+            [InlineKeyboardButton("Next 50 Episodes", callback_data="range_50"),
+             InlineKeyboardButton("Full Series / Unlimited", callback_data="range_all")],
             [InlineKeyboardButton("🔙 Back to Menu", callback_data="back_home")]
         ]
-        await query.message.edit_text("📚 **Batch Series Download:**\n\nSelect how many episodes you want to download in batch:", reply_markup=InlineKeyboardMarkup(keyboard))
-    elif query.data.startswith("batch_"):
-        count = query.data.split("_")[1]
-        context.user_data['batch_limit'] = count
-        limit_text = "All Available" if count == "all" else f"{count} Episodes"
-        await query.message.edit_text(f"✅ **Batch Limit Set to: {limit_text}**\n\nNow, send the Pocket FM series or show link, and I will extract and download all episodes automatically!")
-    elif query.data == "stop_download":
-        active_tasks[query.message.chat_id] = "STOP"
+        await query.message.edit_text("📚 **Batch Range Selector:**\n\nSelect how many episodes you want to download starting from your link:", reply_markup=InlineKeyboardMarkup(keyboard))
+    elif data.startswith("range_"):
+        rng = data.split("_")[1]
+        context.user_data['batch_range'] = rng
+        range_label = "All Available" if rng == "all" else f"Next {rng} Episodes"
+        
+        # If we have stored pending links for this user, trigger execution
+        if chat_id in user_pending_links:
+            url = user_pending_links[chat_id]
+            await query.message.edit_text(f"✅ **Range Set: {range_label}**\n\n🚀 Starting processing now...")
+            context.application.create_task(process_download_sequence(update, context, chat_id, url, rng))
+        else:
+            await query.message.edit_text(f"✅ **Range Set to: {range_label}**\n\nNow send your Pocket FM link!")
+    elif data == "stop_download":
+        active_tasks[chat_id] = "STOP"
         await query.message.reply_text("🛑 Stop signal sent! Current download will halt shortly.")
-    elif query.data == "back_home":
+    elif data == "back_home":
         await start(update, context)
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -296,33 +305,73 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("⚠️ Please send a valid Pocket FM link.")
         return
 
-    active_tasks[chat_id] = "RUNNING"
-    batch_limit = context.user_data.get('batch_limit', '1')
-    
+    url = urls[0]
     session = requests.Session()
     session.cookies.update(load_cookies())
 
-    # Extract all target episode links based on batch selection
-    target_urls = []
-    for base_url in urls:
-        extracted = extract_series_or_episode_links(base_url, session, batch_limit)
-        target_urls.extend(extracted)
+    # Auto-detect total episodes and series info
+    await update.message.reply_text("🔍 Scanning series and calculating total available episodes...")
+    episode_links, series_name = parse_pocketfm_page(url, session)
+    total_found = len(episode_links)
 
-    # Deduplicate
-    seen = set()
-    target_urls = [u for u in target_urls if not (u in seen or seen.add(u))]
+    # Find current index if specific episode link was sent
+    start_idx = 0
+    if url in episode_links:
+        start_idx = episode_links.index(url)
 
-    if batch_limit != '1' and len(target_urls) > 1:
-        await update.message.reply_text(f"📚 Found total series episodes: **{len(target_urls)}**. Starting lightning-fast batch download...")
+    pending_count = total_found - start_idx
+
+    mode = context.user_data.get('mode', 'batch')
+    if mode == 'single':
+        target_urls = [url]
+        await update.message.reply_text(f"🎯 **Series:** {series_name}\n📊 **Total Released:** {total_found} Episodes\n\n🚀 Processing single episode...")
+        context.application.create_task(execute_downloads(update, context, chat_id, target_urls))
     else:
-        await update.message.reply_text(f"🚀 Processing link...")
+        # Save state and prompt range selection buttons
+        user_pending_links[chat_id] = url
+        context.user_data['episode_links'] = episode_links
+        context.user_data['start_idx'] = start_idx
+
+        keyboard = [
+            [InlineKeyboardButton("Next 10 Episodes", callback_data="range_10"),
+             InlineKeyboardButton("Next 20 Episodes", callback_data="range_20")],
+            [InlineKeyboardButton("Next 50 Episodes", callback_data="range_50"),
+             InlineKeyboardButton("Full Series / Unlimited", callback_data="range_all")],
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+
+        info_text = (
+            f"📚 **Series Detected:** {series_name}\n"
+            f"🔢 **Total Released Episodes:** {total_found}\n"
+            f"📍 **Current Episode Position:** #{start_idx + 1}\n"
+            f"⏳ **Pending Episodes from here:** {pending_count}\n\n"
+            f"Please choose how many episodes you want to download:"
+        )
+        await update.message.reply_text(info_text, reply_markup=reply_markup, parse_mode="Markdown")
+
+async def process_download_sequence(update: Update, context: ContextTypes.DEFAULT_TYPE, chat_id, url, rng):
+    episode_links = context.user_data.get('episode_links', [url])
+    start_idx = context.user_data.get('start_idx', 0)
+
+    sub_list = episode_links[start_idx:]
+    if rng != 'all' and rng.isdigit():
+        limit = int(rng)
+        sub_list = sub_list[:limit]
+
+    await execute_downloads(update, context, chat_id, sub_list)
+
+async def execute_downloads(update: Update, context: ContextTypes.DEFAULT_TYPE, chat_id, target_urls):
+    active_tasks[chat_id] = "RUNNING"
+    target_msg = update.message if update.message else update.callback_query.message
+
+    await target_msg.reply_text(f"🚀 Starting lightning-fast download of **{len(target_urls)}** episode(s)...", parse_mode="Markdown")
 
     for i, url in enumerate(target_urls, 1):
         if active_tasks.get(chat_id) == "STOP":
-            await update.message.reply_text("🛑 Download process terminated by user.")
+            await target_msg.reply_text("🛑 Download process terminated by user.")
             break
 
-        msg = await update.message.reply_text(f"⏳ Processing Episode {i}/{len(target_urls)}...")
+        msg = await target_msg.reply_text(f"⏳ Processing Episode {i}/{len(target_urls)}...")
         unique_id = str(uuid.uuid4())[:8]
         thumb_path = f"downloads/thumb_{unique_id}.jpg"
         audio_file_path = None
@@ -348,7 +397,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
             with open(audio_file_path, 'rb') as audio:
                 thumb_file = open(thumb_path, 'rb') if os.path.exists(thumb_path) else None
-                await update.message.reply_audio(
+                await target_msg.reply_audio(
                     audio=audio,
                     title=episode_title,
                     performer=series_name,
@@ -369,9 +418,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             os.remove(thumb_path)
 
     active_tasks[chat_id] = "IDLE"
-    
     keyboard = [[InlineKeyboardButton("🏠 Main Menu", callback_data="back_home")]]
-    await update.message.reply_text("✨ Batch download task completed successfully!", reply_markup=InlineKeyboardMarkup(keyboard))
+    await target_msg.reply_text("✨ Batch download task completed successfully!", reply_markup=InlineKeyboardMarkup(keyboard))
 
 def run_bot():
     application = Application.builder().token(TOKEN).build()
