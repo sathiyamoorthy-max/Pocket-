@@ -1,6 +1,7 @@
 flask
-python-telegram-bot
+python-telegram-bot>=20.3
 requests
-Pillow
 m3u8
 pycryptodome
+Pillow
+cloudscraper
