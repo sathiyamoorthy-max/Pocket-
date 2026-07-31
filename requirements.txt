@@ -4,4 +4,3 @@ requests
 m3u8
 pycryptodome
 Pillow
-curl_cffi
