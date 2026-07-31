@@ -32,7 +32,7 @@ load_dotenv()
 # ==========================================
 PROXY_URL = None  # உங்களது Proxy IP இருந்தால் இங்கே போடலாம் (எ.கா: 'http://ip:port')
 
-# 🔥 FIXED: requests 라이ப்ரரி நிரந்தரமாக Import செய்யப்பட்டுள்ளது!
+# 🔥 FIXED: requests லைப்ரரி நிரந்தரமாக Import செய்யப்பட்டுள்ளது!
 import requests
 
 try:
@@ -60,7 +60,6 @@ def run_flask():
     port = int(os.environ.get('PORT', 5000))
     flask_app.run(host='0.0.0.0', port=port)
 
-# இப்போது requests பிழை வராது!
 session = requests.Session()
 STATS = {"downloads": 0, "start_time": time.time()}
 USER_CACHE = {}
@@ -74,12 +73,13 @@ def human_readable_size(size_bytes):
     s = round(size_bytes / p, 2)
     return f"{s} {size_name[i]}"
 
-# 🛠️ Universal Request Fetcher (Proxy Support)
+# 🛠️ Universal Request Fetcher (Proxy Support & chrome116 Fix)
 def fetch_page(url, headers=None, timeout=30, stream=False):
     proxies = {'http': PROXY_URL, 'https': PROXY_URL} if PROXY_URL else None
     
     if CURL_AVAILABLE and not stream:
-        return curl_requests.get(url, impersonate="chrome133", headers=headers, timeout=timeout, proxies=proxies)
+        # 🔥 FIXED: Changed chrome133 to chrome116 here!
+        return curl_requests.get(url, impersonate="chrome116", headers=headers, timeout=timeout, proxies=proxies)
     else:
         return session.get(url, headers=headers, timeout=timeout, proxies=proxies, stream=stream)
 
@@ -120,7 +120,7 @@ def get_series_data(series_url):
     api_url = f"https://pocketfm.com/show/{show_id}"
     
     headers = {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36',
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/116.0.0.0 Safari/537.36',
         'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
         'Referer': 'https://pocketfm.com/'
     }
