@@ -27,14 +27,14 @@ logger = logging.getLogger(__name__)
 flask_app = Flask(__name__)
 @flask_app.route('/')
 def index():
-    return "Ultimate Bot Online!"
+    return "World Class Ultimate Bot Online!"
 
 def run_flask():
     port = int(os.environ.get('PORT', 5000))
     flask_app.run(host='0.0.0.0', port=port)
 
 # ==========================================
-# GLOBAL SESSION & COOKIE SETUP
+# 🍪 1. COOKIE SESSION SETUP
 # ==========================================
 COOKIE_FILE = 'cookies.txt'
 session = requests.Session()
@@ -52,7 +52,7 @@ def load_cookies():
     return False
 
 # ==========================================
-# SMART ONELINK RESOLVER
+# 🕵️ 2. SMART ONELINK RESOLVER
 # ==========================================
 def resolve_onelink(onelink_url):
     headers = {'User-Agent': 'Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/132.0.0.0 Mobile Safari/537.36'}
@@ -65,7 +65,7 @@ def resolve_onelink(onelink_url):
         return None
 
 # ==========================================
-# FUTURE EPISODE TRACKER
+# 📅 3. FUTURE EPISODE TRACKER (series_cache.json)
 # ==========================================
 TRACKER_FILE = 'series_cache.json'
 def load_tracker():
@@ -79,7 +79,7 @@ def save_tracker(data):
         json.dump(data, f)
 
 # ==========================================
-# 403 FIX: SMART ERROR GUIDE INSIDE THE FUNCTION
+# 🔥 4. ADVANCED SERIES FETCHER (Mobile UA + JSON Parser)
 # ==========================================
 def get_series_data(series_url):
     match = re.search(r'/show/([a-zA-Z0-9_-]+)', series_url)
@@ -88,6 +88,7 @@ def get_series_data(series_url):
     show_id = match.group(1).split('?')[0]
     api_url = f"https://pocketfm.com/show/{show_id}"
     
+    # Mobile Safari User-Agent (Render IP Block-ஐ ஓரளவு ஏமாற்ற)
     headers = {
         'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1',
         'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
@@ -96,9 +97,11 @@ def get_series_data(series_url):
     }
     
     try:
+        load_cookies()
         resp = session.get(api_url, headers=headers, timeout=30)
         if resp.status_code == 403:
             raise Exception("RENDER_IP_BLOCKED")
+            
         html = resp.text
         title_match = re.search(r'<meta property="og:title" content="([^"]+)"', html)
         series_title = title_match.group(1).split("|")[0].strip() if title_match else "Pocket FM Series"
@@ -127,20 +130,21 @@ def get_series_data(series_url):
         
     except Exception as e:
         if str(e) == "RENDER_IP_BLOCKED":
-            # 🔥 இங்கேதான் பயனருக்கு Bypass வழிகாட்டியை போட் சொல்லும்!
+            # 🔥 கிவி கன்சோல் ஹேக் வழிகாட்டி
             raise Exception(
-                "❌ **Render IP Blocked by Cloudflare.**\n\n"
+                "❌ **Render IP Blocked by Cloudflare. But we have a 100% bypass!**\n\n"
                 "💡 Use **'Multi-Link Bypass Mode'** to download this series:\n"
                 "1️⃣ Open this Show page in **Kiwi Browser**.\n"
                 "2️⃣ Tap `...` (Menu) -> `Developer Tools` -> `Console`.\n"
-                "3️⃣ **Copy & Paste this JS code** and hit Enter:\n"
+                "3️⃣ Copy & Paste this JS code into Console and hit Enter:\n"
                 "`document.querySelectorAll('a[href*=\"/episode/\"]').forEach(a => { if(a.href) console.log(a.href); });`\n"
-                "4️⃣ **Copy the output list** and **paste ALL links** here in ONE message. I will download them in BATCH for you!"
+                "4️⃣ Copy the output list and paste ALL links here in ONE message.\n"
+                "🎯 The bot will automatically download them all in BATCH mode!"
             )
         raise e
 
 # ==========================================
-# DOWNLOAD CORE (M3U8, AES, FFMPEG)
+# 🎵 5. DOWNLOAD CORE (M3U8, AES, FFMPEG)
 # ==========================================
 def download_chunk(args):
     i, seg_url, base_url, aes_key, iv, tmpdir = args
@@ -243,16 +247,15 @@ async def download_and_send_episode(update, context, ep_url, ep_number=None, tot
         return False, str(e)
 
 # ==========================================
-# BOT HANDLERS (FULLY SELF-CONTAINED)
+# 🤖 6. BOT HANDLERS (START, RENEW, MESSAGE)
 # ==========================================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    load_cookies()
     await update.message.reply_text(
-        "🚀 **World Class Pocket FM Downloader**\n\n"
+        "🚀 **World Class Ultimate Pocket FM Bot**\n\n"
         "✅ **How to Use:**\n"
         "1. **Single:** `/episode/...`\n"
-        "2. **Multi-Link (Ultimate Bypass):** Copy all episode links and paste in ONE message.\n"
-        "3. **Series:** `/show/...` (If it fails, the bot will give you the **JavaScript Copy-Paste hack** to get ALL links instantly)."
+        "2. **Multi-Link (Bypass):** Copy ALL episode links and paste in ONE message.\n"
+        "3. **Series:** `/show/...` (If blocked, bot will teach you the Kiwi Console Bypass!)."
     )
 
 async def renew(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -262,13 +265,12 @@ async def renew(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "2. Use `Get cookies.txt LOCALLY` extension to Download a **New** file.\n"
         "3. Go to Render -> **Shell** -> **Upload** new `cookies.txt`.\n"
         "4. **Restart Service** in Render.\n\n"
-        "✅ Does not bypass Render IP Block, but helps for single episodes."
+        "✅ This helps for single episodes!"
     )
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text.strip()
     msg = await update.message.reply_text("🔍 Analyzing link(s)...")
-    load_cookies()
 
     if 'onelink.me' in text and 'pocketfm.com' not in text:
         await msg.edit_text("🔄 Resolving App Store redirect...")
@@ -281,7 +283,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
 
     try:
-        # 🔥 Multi-Link Mode (The ultimate bypass)
+        # 🔥 BATCH MULTI-LINK MODE (The Ultimate Bypass)
         if text.count('pocketfm.com/episode/') > 1 or '\n' in text:
             urls = [line.strip() for line in text.split('\n') if 'pocketfm.com/episode/' in line]
             if not urls:
@@ -293,7 +295,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await msg.edit_text(f"✅ Batch complete! {len(urls)} files sent.")
             return
 
-        # Series Mode
+        # 📺 SERIES MODE (With Smart Exception)
         elif '/show/' in text:
             url = text.split('|')[0].strip()
             await msg.edit_text("🔄 Fetching Series Data...")
@@ -320,11 +322,11 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await msg.edit_text(f"🎉 All {len(new_eps)} new episodes sent successfully!")
                 
             except Exception as e:
-                # The bot catches the custom error we raised and prints the JS bypass guide
+                # 🔥 போட் தானாகவே பைபாஸ் வழிகாட்டியை காண்பிக்கும்!
                 await msg.edit_text(str(e))
             return
 
-        # Single Episode
+        # 🎵 SINGLE EPISODE MODE
         elif '/episode/' in text:
             await msg.edit_text("⬇️ Downloading single episode...")
             success, result = await download_and_send_episode(update, context, text)
