@@ -9,7 +9,6 @@ import json
 import threading
 import time
 import math
-import urllib.parse
 from dotenv import load_dotenv
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from PIL import Image
@@ -19,19 +18,11 @@ from flask import Flask
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, filters, ContextTypes
 
-# Cloudflare Bypass
-try:
-    from curl_cffi import requests as curl_requests
-    CURL_AVAILABLE = True
-except ImportError:
-    CURL_AVAILABLE = False
-    import requests as curl_requests
-
+# Original Libraries (No yt-dlp for PocketFM)
 import requests
 import m3u8
 from Crypto.Cipher import AES
 from Crypto.Util.Padding import unpad
-import yt_dlp
 
 load_dotenv()
 
@@ -47,42 +38,27 @@ logger = logging.getLogger(__name__)
 flask_app = Flask(__name__)
 @flask_app.route('/')
 def index():
-    return "Pocket FM Premium Interactive Bot is Online!"
+    return "Pocket FM Classic Bot is Online!"
 
 def run_flask():
     port = int(os.environ.get('PORT', 5000))
     flask_app.run(host='0.0.0.0', port=port)
 
-# 🔥 1. PERSISTENT SESSION & HEADERS
-if CURL_AVAILABLE:
-    session = curl_requests.Session(impersonate="chrome116")
-else:
-    session = requests.Session()
-
+# Simple Session
+session = requests.Session()
 STATS = {"downloads": 0, "start_time": time.time()}
 USER_STATE = {}
 
+# Original Simple Headers
 HEADERS = {
-    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/116.0.0.0 Safari/537.36',
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
     'Accept': '*/*',
-    'Accept-Language': 'en-US,en;q=0.9',
     'Referer': 'https://pocketfm.com/',
     'Origin': 'https://pocketfm.com'
 }
 
-def human_readable_size(size_bytes):
-    if not size_bytes: return "0B"
-    size_name = ("B", "KB", "MB", "GB", "TB")
-    i = int(math.floor(math.log(size_bytes, 1024)))
-    p = math.pow(1024, i)
-    return f"{round(size_bytes / p, 2)} {size_name[i]}"
-
-def fetch_page(url, headers=None, timeout=30):
-    req_headers = headers if headers else HEADERS
-    return session.get(url, headers=req_headers, timeout=timeout)
-
 # ==========================================
-# 🔥 POCKET FM SERIES FETCHER
+# 🔥 POCKET FM SERIES FETCHER (CLASSIC)
 # ==========================================
 def get_series_data(series_url):
     match = re.search(r'/show/([a-zA-Z0-9_-]+)', series_url)
@@ -90,9 +66,9 @@ def get_series_data(series_url):
     show_id = match.group(1).split('?')[0]
     api_url = f"https://pocketfm.com/show/{show_id}"
     
-    resp = fetch_page(api_url, timeout=30)
-    if resp.status_code == 403:
-        raise Exception(f"Cloudflare blocked fetch. Status: {resp.status_code}")
+    resp = session.get(api_url, headers=HEADERS, timeout=30)
+    if resp.status_code != 200:
+        raise Exception(f"Failed to fetch show page. Status code: {resp.status_code}")
 
     html = resp.text
     title_match = re.search(r'<meta property="og:title" content="([^"]+)"', html)
@@ -129,35 +105,19 @@ def get_series_data(series_url):
     if not ep_list: raise Exception("Episodes not found inside JSON structure.")
     return series_title, series_thumb, ep_list
 
-# 🔥 2. BULLETPROOF URL RESOLVER (SECURITY TOKEN INJECTOR)
-def resolve_url(base_url, target_uri):
-    joined_url = urllib.parse.urljoin(base_url, target_uri)
-    base_parsed = urllib.parse.urlparse(base_url)
-    joined_parsed = urllib.parse.urlparse(joined_url)
-    
-    # 403 எரரைத் தடுக்க, M3U8-ல் உள்ள செக்யூரிட்டி டோக்கனை Chunks-களுக்கு மாற்றுகிறோம்!
-    if not joined_parsed.query and base_parsed.query:
-        joined_parsed = joined_parsed._replace(query=base_parsed.query)
-        
-    return urllib.parse.urlunparse(joined_parsed)
-
 # ==========================================
-# 🎵 CUSTOM BULLETPROOF AUDIO DOWNLOADER
+# 🎵 ORIGINAL AUDIO DOWNLOADER (MANUAL CHUNKS)
 # ==========================================
 def download_chunk(args):
-    i, full_url, aes_key, iv, tmpdir = args
+    i, seg_url, base_url, aes_key, iv, tmpdir = args
     try:
+        full_url = seg_url if seg_url.startswith('http') else f"{base_url}/{seg_url}"
         ts_path = os.path.join(tmpdir, f"chunk_{i:04d}.ts")
         
-        response = fetch_page(full_url, timeout=20)
-        
-        if response.status_code != 200:
-            logger.error(f"Chunk {i} blocked by CDN. HTTP: {response.status_code}")
-            return i, None
-            
+        response = session.get(full_url, headers=HEADERS, timeout=20, stream=True)
         data = response.content
-        if b'<html' in data[:50].lower() or b'accessdenied' in data[:50].lower():
-            logger.error(f"Chunk {i} returned Access Denied.")
+        
+        if b'<html' in data[:100].lower():
             return i, None
             
         if aes_key and iv:
@@ -170,52 +130,42 @@ def download_chunk(args):
             with open(ts_path, 'wb') as f: f.write(decrypted_data)
         else:
             with open(ts_path, 'wb') as f: f.write(data)
-            
         return i, ts_path
-    except Exception as e:
-        logger.error(f"Chunk {i} Exception: {e}")
+    except:
         return i, None
 
 def download_audio_from_m3u8(m3u8_url):
-    resp = fetch_page(m3u8_url, timeout=15)
-    if resp.status_code != 200:
-        raise Exception(f"Failed to fetch M3U8. HTTP {resp.status_code}")
-        
-    playlist = m3u8.loads(resp.text, uri=m3u8_url)
+    m3u8_content = session.get(m3u8_url, headers=HEADERS, timeout=15).text
+    playlist = m3u8.loads(m3u8_content, uri=m3u8_url)
+    base_url = '/'.join(m3u8_url.split('/')[:-1])
     
     if not playlist.segments and playlist.playlists:
-        sub_url = resolve_url(m3u8_url, playlist.playlists[0].uri)
-        resp = fetch_page(sub_url, timeout=15)
-        playlist = m3u8.loads(resp.text, uri=sub_url)
-        m3u8_url = sub_url  # Update base url for chunk resolving
+        m3u8_url = playlist.playlists[0].uri
+        m3u8_url = m3u8_url if m3u8_url.startswith('http') else f"{base_url}/{m3u8_url}"
+        m3u8_content = session.get(m3u8_url, headers=HEADERS, timeout=15).text
+        playlist = m3u8.loads(m3u8_content, uri=m3u8_url)
+        base_url = '/'.join(m3u8_url.split('/')[:-1])
         
     aes_key, iv = None, None
-    if playlist.keys and playlist.keys[0] and playlist.keys[0].uri:
-        key_url = resolve_url(m3u8_url, playlist.keys[0].uri)
+    if playlist.keys and playlist.keys[0]:
+        key_uri = playlist.keys[0].uri
         iv = playlist.keys[0].iv
-        key_resp = fetch_page(key_url, timeout=15)
-        if key_resp.status_code == 200:
-            aes_key = key_resp.content
-        else:
-            raise Exception("Failed to fetch AES encryption key.")
+        key_url = key_uri if key_uri.startswith('http') else f"{base_url}/{key_uri}"
+        aes_key = session.get(key_url, headers=HEADERS, timeout=15).content
 
+    segments = [seg.uri for seg in playlist.segments]
     with tempfile.TemporaryDirectory() as tmpdir:
-        tasks = []
-        for i, seg in enumerate(playlist.segments):
-            seg_url = resolve_url(m3u8_url, seg.uri)
-            tasks.append((i, seg_url, aes_key, iv, tmpdir))
-            
+        tasks = [(i, seg, base_url, aes_key, iv, tmpdir) for i, seg in enumerate(segments)]
         ts_files_dict = {}
+        
         with ThreadPoolExecutor(max_workers=5) as executor:
             futures = [executor.submit(download_chunk, arg) for arg in tasks]
             for future in as_completed(futures):
                 idx, path = future.result()
                 if path: ts_files_dict[idx] = path
                 
-        ts_files = [ts_files_dict.get(i) for i in range(len(tasks)) if ts_files_dict.get(i)]
-        
-        if len(ts_files) == 0: 
-            raise Exception("403 Forbidden: Cloudfront WAF completely blocked your Render IP.")
+        ts_files = [ts_files_dict[i] for i in sorted(ts_files_dict.keys())]
+        if not ts_files: raise Exception("Cloudflare Blocked the audio chunks.")
         
         if not os.path.exists('downloads'): os.makedirs('downloads')
         output_file = f"downloads/audio_{uuid.uuid4().hex[:8]}.mp3"
@@ -227,9 +177,9 @@ def download_audio_from_m3u8(m3u8_url):
         return output_file
 
 def get_episode_metadata(episode_url):
-    resp = fetch_page(episode_url, timeout=20)
-    if resp.status_code == 403:
-        raise Exception("Failed to fetch episode. Blocked by Cloudflare.")
+    resp = session.get(episode_url, headers=HEADERS, timeout=20)
+    if resp.status_code != 200:
+        raise Exception("Failed to fetch episode. HTTP Error.")
         
     html = resp.text
     title = re.search(r'<meta property="og:title" content="([^"]+)"', html)
@@ -253,7 +203,7 @@ async def download_and_send_episode(update, context, ep_url, ep_number=None, tot
         if final_thumb_url:
             thumb_path = f"downloads/thumb_{uuid.uuid4().hex[:8]}.jpg"
             try:
-                img_data = fetch_page(final_thumb_url, timeout=15).content
+                img_data = session.get(final_thumb_url, headers=HEADERS, timeout=15).content
                 with open(thumb_path, 'wb') as f: f.write(img_data)
                 Image.open(thumb_path).convert('RGB').thumbnail((320, 320)).save(thumb_path, 'JPEG')
             except:
