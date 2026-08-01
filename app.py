@@ -4,18 +4,22 @@ import subprocess
 import logging
 import asyncio
 import uuid
+import tempfile
 import json
 import threading
 import time
 import math
+import urllib.parse
 from dotenv import load_dotenv
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from PIL import Image
 
 # Flask & Telegram
 from flask import Flask
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, filters, ContextTypes
 
-# Cloudflare Bypass & Downloads
+# Cloudflare Bypass
 try:
     from curl_cffi import requests as curl_requests
     CURL_AVAILABLE = True
@@ -24,6 +28,9 @@ except ImportError:
     import requests as curl_requests
 
 import requests
+import m3u8
+from Crypto.Cipher import AES
+from Crypto.Util.Padding import unpad
 import yt_dlp
 
 load_dotenv()
@@ -46,7 +53,7 @@ def run_flask():
     port = int(os.environ.get('PORT', 5000))
     flask_app.run(host='0.0.0.0', port=port)
 
-# Persistent Session
+# 🔥 1. PERSISTENT SESSION & HEADERS
 if CURL_AVAILABLE:
     session = curl_requests.Session(impersonate="chrome116")
 else:
@@ -62,6 +69,13 @@ HEADERS = {
     'Referer': 'https://pocketfm.com/',
     'Origin': 'https://pocketfm.com'
 }
+
+def human_readable_size(size_bytes):
+    if not size_bytes: return "0B"
+    size_name = ("B", "KB", "MB", "GB", "TB")
+    i = int(math.floor(math.log(size_bytes, 1024)))
+    p = math.pow(1024, i)
+    return f"{round(size_bytes / p, 2)} {size_name[i]}"
 
 def fetch_page(url, headers=None, timeout=30):
     req_headers = headers if headers else HEADERS
@@ -115,6 +129,103 @@ def get_series_data(series_url):
     if not ep_list: raise Exception("Episodes not found inside JSON structure.")
     return series_title, series_thumb, ep_list
 
+# 🔥 2. BULLETPROOF URL RESOLVER (SECURITY TOKEN INJECTOR)
+def resolve_url(base_url, target_uri):
+    joined_url = urllib.parse.urljoin(base_url, target_uri)
+    base_parsed = urllib.parse.urlparse(base_url)
+    joined_parsed = urllib.parse.urlparse(joined_url)
+    
+    # 403 எரரைத் தடுக்க, M3U8-ல் உள்ள செக்யூரிட்டி டோக்கனை Chunks-களுக்கு மாற்றுகிறோம்!
+    if not joined_parsed.query and base_parsed.query:
+        joined_parsed = joined_parsed._replace(query=base_parsed.query)
+        
+    return urllib.parse.urlunparse(joined_parsed)
+
+# ==========================================
+# 🎵 CUSTOM BULLETPROOF AUDIO DOWNLOADER
+# ==========================================
+def download_chunk(args):
+    i, full_url, aes_key, iv, tmpdir = args
+    try:
+        ts_path = os.path.join(tmpdir, f"chunk_{i:04d}.ts")
+        
+        response = fetch_page(full_url, timeout=20)
+        
+        if response.status_code != 200:
+            logger.error(f"Chunk {i} blocked by CDN. HTTP: {response.status_code}")
+            return i, None
+            
+        data = response.content
+        if b'<html' in data[:50].lower() or b'accessdenied' in data[:50].lower():
+            logger.error(f"Chunk {i} returned Access Denied.")
+            return i, None
+            
+        if aes_key and iv:
+            iv_bytes = bytes.fromhex(iv.replace('0x', '')) if isinstance(iv, str) else iv
+            iv_bytes = iv_bytes.ljust(16, b'\0')
+            cipher = AES.new(aes_key, AES.MODE_CBC, iv_bytes)
+            decrypted_data = cipher.decrypt(data)
+            try: decrypted_data = unpad(decrypted_data, AES.block_size)
+            except: pass
+            with open(ts_path, 'wb') as f: f.write(decrypted_data)
+        else:
+            with open(ts_path, 'wb') as f: f.write(data)
+            
+        return i, ts_path
+    except Exception as e:
+        logger.error(f"Chunk {i} Exception: {e}")
+        return i, None
+
+def download_audio_from_m3u8(m3u8_url):
+    resp = fetch_page(m3u8_url, timeout=15)
+    if resp.status_code != 200:
+        raise Exception(f"Failed to fetch M3U8. HTTP {resp.status_code}")
+        
+    playlist = m3u8.loads(resp.text, uri=m3u8_url)
+    
+    if not playlist.segments and playlist.playlists:
+        sub_url = resolve_url(m3u8_url, playlist.playlists[0].uri)
+        resp = fetch_page(sub_url, timeout=15)
+        playlist = m3u8.loads(resp.text, uri=sub_url)
+        m3u8_url = sub_url  # Update base url for chunk resolving
+        
+    aes_key, iv = None, None
+    if playlist.keys and playlist.keys[0] and playlist.keys[0].uri:
+        key_url = resolve_url(m3u8_url, playlist.keys[0].uri)
+        iv = playlist.keys[0].iv
+        key_resp = fetch_page(key_url, timeout=15)
+        if key_resp.status_code == 200:
+            aes_key = key_resp.content
+        else:
+            raise Exception("Failed to fetch AES encryption key.")
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tasks = []
+        for i, seg in enumerate(playlist.segments):
+            seg_url = resolve_url(m3u8_url, seg.uri)
+            tasks.append((i, seg_url, aes_key, iv, tmpdir))
+            
+        ts_files_dict = {}
+        with ThreadPoolExecutor(max_workers=5) as executor:
+            futures = [executor.submit(download_chunk, arg) for arg in tasks]
+            for future in as_completed(futures):
+                idx, path = future.result()
+                if path: ts_files_dict[idx] = path
+                
+        ts_files = [ts_files_dict.get(i) for i in range(len(tasks)) if ts_files_dict.get(i)]
+        
+        if len(ts_files) == 0: 
+            raise Exception("403 Forbidden: Cloudfront WAF completely blocked your Render IP.")
+        
+        if not os.path.exists('downloads'): os.makedirs('downloads')
+        output_file = f"downloads/audio_{uuid.uuid4().hex[:8]}.mp3"
+        list_path = os.path.join(tmpdir, "list.txt")
+        with open(list_path, 'w') as f:
+            for ts in ts_files: f.write(f"file '{ts}'\n")
+            
+        subprocess.run(['ffmpeg', '-y', '-f', 'concat', '-safe', '0', '-i', list_path, '-c:a', 'libmp3lame', '-q:a', '2', output_file], check=True, capture_output=True)
+        return output_file
+
 def get_episode_metadata(episode_url):
     resp = fetch_page(episode_url, timeout=20)
     if resp.status_code == 403:
@@ -131,47 +242,9 @@ def get_episode_metadata(episode_url):
     ep_title = title.group(1).split("|")[0].strip() if title else "Episode"
     return m3u8.group(1), ep_title, img.group(1) if img else None
 
-# ==========================================
-# 🎵 YT-DLP AUDIO DOWNLOADER (THE MASTERSTROKE)
-# ==========================================
-def download_audio_from_m3u8(m3u8_url):
-    unique_id = uuid.uuid4().hex[:8]
-    if not os.path.exists('downloads'): os.makedirs('downloads')
-    
-    outtmpl = f"downloads/audio_{unique_id}.%(ext)s"
-    expected_output = f"downloads/audio_{unique_id}.mp3"
-    
-    ydl_opts = {
-        'outtmpl': outtmpl,
-        'format': 'bestaudio/best',
-        'http_headers': HEADERS,  # CDN-ஐ ஏமாற்றும் ஹெடர்கள்
-        'quiet': True,
-        'no_warnings': True,
-        'postprocessors': [{
-            'key': 'FFmpegExtractAudio',
-            'preferredcodec': 'mp3',
-            'preferredquality': '192',
-        }],
-    }
-    
-    try:
-        # நாம் மேனுவலாக டவுன்லோட் செய்வதற்குப் பதிலாக yt-dlp-யிடம் அந்த வேலையை கொடுத்துவிட்டோம்!
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            ydl.download([m3u8_url])
-            
-        if os.path.exists(expected_output):
-            return expected_output
-        else:
-            raise Exception("yt-dlp failed to generate MP3.")
-    except Exception as e:
-        raise Exception(f"Audio Download Failed: {e}")
-
 async def download_and_send_episode(update, context, ep_url, ep_number=None, total_eps=None, series_thumb=None):
     try:
-        # 1. பைபாஸ் மூலம் M3U8 லிங்க்கை எடுத்தல்
         m3u8_url, title, thumb_url = await asyncio.to_thread(get_episode_metadata, ep_url)
-        
-        # 2. தடைகளைத் தகர்த்து yt-dlp மூலம் ஆடியோவை டவுன்லோட் செய்தல்
         audio_path = await asyncio.to_thread(download_audio_from_m3u8, m3u8_url)
         
         final_thumb_url = thumb_url if thumb_url else series_thumb
@@ -180,9 +253,9 @@ async def download_and_send_episode(update, context, ep_url, ep_number=None, tot
         if final_thumb_url:
             thumb_path = f"downloads/thumb_{uuid.uuid4().hex[:8]}.jpg"
             try:
-                # requests-ஐ பயன்படுத்தாமல், Cloudflare-ஐ பைபாஸ் செய்யும் session-ஐ பயன்படுத்துகிறோம்
                 img_data = fetch_page(final_thumb_url, timeout=15).content
                 with open(thumb_path, 'wb') as f: f.write(img_data)
+                Image.open(thumb_path).convert('RGB').thumbnail((320, 320)).save(thumb_path, 'JPEG')
             except:
                 thumb_path = None
                 
