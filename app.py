@@ -51,10 +51,18 @@ USER_STATE = {}
 
 # Original Simple Headers
 HEADERS = {
-    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+    '# 🌐 THE MASTER HACK: YOUR BROWSER IDENTITY
+MY_SECRET_COOKIE = "இங்கே_உங்கள்_பிரவுசரில்_காப்பி_செய்த_முழு_COOKIE_ஐ_பேஸ்ட்_செய்யவும்"
+MY_USER_AGENT = "இங்கே_உங்கள்_பிரவுசரில்_காப்பி_செய்த_USER_AGENT_ஐ_பேஸ்ட்_செய்யவும்"
+
+HEADERS = {
+    'User-Agent': MY_USER_AGENT,
     'Accept': '*/*',
+    'Accept-Language': 'en-US,en;q=0.9',
     'Referer': 'https://pocketfm.com/',
-    'Origin': 'https://pocketfm.com'
+    'Origin': 'https://pocketfm.com',
+    'Cookie': MY_SECRET_COOKIE  # 🔥 Cloudflare-ஐ ஏமாற்றும் மாஸ்டர் சாவி
+}'
 }
 
 # ==========================================
