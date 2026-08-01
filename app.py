@@ -18,7 +18,14 @@ from flask import Flask
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, filters, ContextTypes
 
-# M3U8 & Crypto
+# Cloudflare Bypass & Crypto
+try:
+    from curl_cffi import requests as curl_requests
+    CURL_AVAILABLE = True
+except ImportError:
+    CURL_AVAILABLE = False
+    import requests as curl_requests
+
 import requests
 import m3u8
 from Crypto.Cipher import AES
@@ -53,7 +60,7 @@ USER_STATE = {}
 
 # 🌐 STABLE BROWSER HEADERS
 HEADERS = {
-    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/116.0.0.0 Safari/537.36',
     'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
     'Accept-Language': 'en-US,en;q=0.9',
     'Referer': 'https://pocketfm.com/'
@@ -66,6 +73,15 @@ def human_readable_size(size_bytes):
     p = math.pow(1024, i)
     return f"{round(size_bytes / p, 2)} {size_name[i]}"
 
+# 🛠️ CLOUDFLARE BYPASS FETCHER
+def fetch_page(url, headers=None, timeout=30):
+    req_headers = headers if headers else HEADERS
+    if CURL_AVAILABLE:
+        # Chrome 116 TLS fingerprint to bypass Cloudflare
+        return curl_requests.get(url, impersonate="chrome116", headers=req_headers, timeout=timeout)
+    else:
+        return session.get(url, headers=req_headers, timeout=timeout)
+
 # ==========================================
 # 🔥 POCKET FM SERIES FETCHER
 # ==========================================
@@ -75,9 +91,9 @@ def get_series_data(series_url):
     show_id = match.group(1).split('?')[0]
     api_url = f"https://pocketfm.com/show/{show_id}"
     
-    resp = session.get(api_url, headers=HEADERS, timeout=30)
-    if resp.status_code != 200:
-        raise Exception(f"Failed to fetch show page. Status code: {resp.status_code}")
+    resp = fetch_page(api_url, headers=HEADERS, timeout=30)
+    if resp.status_code == 403:
+        raise Exception(f"Cloudflare blocked fetch. Status: {resp.status_code}")
 
     html = resp.text
     title_match = re.search(r'<meta property="og:title" content="([^"]+)"', html)
@@ -129,7 +145,8 @@ def download_chunk(args):
         chunk_headers = HEADERS.copy()
         chunk_headers['Origin'] = 'https://pocketfm.com'
         
-        response = session.get(full_url, headers=chunk_headers, timeout=20, stream=True)
+        # 🔥 Using fetch_page (curl_cffi) to download audio chunks without getting blocked
+        response = fetch_page(full_url, headers=chunk_headers, timeout=20)
         data = response.content
         
         if b'<html' in data[:100].lower():
@@ -150,14 +167,14 @@ def download_chunk(args):
         return i, None
 
 def download_audio_from_m3u8(m3u8_url):
-    m3u8_content = session.get(m3u8_url, headers=HEADERS, timeout=15).text
+    m3u8_content = fetch_page(m3u8_url, headers=HEADERS, timeout=15).text
     playlist = m3u8.loads(m3u8_content, uri=m3u8_url)
     base_url = '/'.join(m3u8_url.split('/')[:-1])
     
     if not playlist.segments and playlist.playlists:
         m3u8_url = playlist.playlists[0].uri
         m3u8_url = m3u8_url if m3u8_url.startswith('http') else f"{base_url}/{m3u8_url}"
-        m3u8_content = session.get(m3u8_url, headers=HEADERS, timeout=15).text
+        m3u8_content = fetch_page(m3u8_url, headers=HEADERS, timeout=15).text
         playlist = m3u8.loads(m3u8_content, uri=m3u8_url)
         base_url = '/'.join(m3u8_url.split('/')[:-1])
         
@@ -166,7 +183,7 @@ def download_audio_from_m3u8(m3u8_url):
         key_uri = playlist.keys[0].uri
         iv = playlist.keys[0].iv
         key_url = key_uri if key_uri.startswith('http') else f"{base_url}/{key_uri}"
-        aes_key = session.get(key_url, headers=HEADERS, timeout=15).content
+        aes_key = fetch_page(key_url, headers=HEADERS, timeout=15).content
 
     segments = [seg.uri for seg in playlist.segments]
     with tempfile.TemporaryDirectory() as tmpdir:
@@ -180,7 +197,7 @@ def download_audio_from_m3u8(m3u8_url):
                 if path: ts_files_dict[idx] = path
                 
         ts_files = [ts_files_dict[i] for i in sorted(ts_files_dict.keys())]
-        if not ts_files: raise Exception("Cloudflare Blocked the audio chunks. Try again later.")
+        if not ts_files: raise Exception("Cloudflare Blocked the audio chunks. CDN restricted.")
         
         if not os.path.exists('downloads'): os.makedirs('downloads')
         output_file = f"downloads/audio_{uuid.uuid4().hex[:8]}.mp3"
@@ -192,9 +209,9 @@ def download_audio_from_m3u8(m3u8_url):
         return output_file
 
 def get_episode_metadata(episode_url):
-    resp = session.get(episode_url, headers=HEADERS, timeout=20)
-    if resp.status_code != 200:
-        raise Exception("Failed to fetch episode.")
+    resp = fetch_page(episode_url, headers=HEADERS, timeout=20)
+    if resp.status_code == 403:
+        raise Exception("Failed to fetch episode. Blocked by Cloudflare.")
         
     html = resp.text
     title = re.search(r'<meta property="og:title" content="([^"]+)"', html)
@@ -219,7 +236,7 @@ async def download_and_send_episode(update, context, ep_url, ep_number=None, tot
         if final_thumb_url:
             thumb_path = f"downloads/thumb_{uuid.uuid4().hex[:8]}.jpg"
             try:
-                img_data = session.get(final_thumb_url, headers=HEADERS, timeout=15).content
+                img_data = fetch_page(final_thumb_url, headers=HEADERS, timeout=15).content
                 with open(thumb_path, 'wb') as f: f.write(img_data)
                 Image.open(thumb_path).convert('RGB').thumbnail((320, 320)).save(thumb_path, 'JPEG')
             except:
@@ -310,7 +327,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 'thumb': series_thumb
             }
             
-            # Message formatting exactly like your screenshot
             caption = (
                 f"✅ 100% ஒரிஜினல் தரத்தில் தயாராக உள்ளது!\n\n"
                 f"🎧 Series Selected: {series_title}\n"
@@ -340,7 +356,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # General Media via yt_dlp
     elif text.startswith(("http://", "https://")):
-        await update.message.reply_text("Media links logic goes here... (Please use pocketfm links)")
+        await update.message.reply_text("⚠️ Please send Pocket FM links only.")
 
 def main():
     if not os.path.exists("downloads"): os.makedirs("downloads")
