@@ -11,13 +11,12 @@ import time
 import math
 import random
 import requests
-from dotenv import load_dotenv
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from PIL import Image
 
 # Flask & Telegram
 from flask import Flask
-from telegram import Update
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 
 # M3U8 & Crypto
@@ -25,8 +24,6 @@ import m3u8
 from Crypto.Cipher import AES
 from Crypto.Util.Padding import unpad
 import yt_dlp
-
-load_dotenv()
 
 # ==========================================
 # 🔥 1. CLOUDFLARE TLS BYPASS (JA3 IMPERSONATION)
@@ -100,7 +97,7 @@ def fetch_page(url, headers=None, timeout=30):
 # ==========================================
 TOKEN = os.getenv("TELEGRAM_TOKEN")
 if not TOKEN:
-    raise ValueError("No TELEGRAM_TOKEN found")
+    raise ValueError("No TELEGRAM_TOKEN found. Please add it to Render Environment Variables.")
 
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -199,11 +196,11 @@ def get_episode_metadata(episode_url):
     html = resp.text
     title = re.search(r'<meta property="og:title" content="([^"]+)"', html)
     img = re.search(r'<meta property="og:image" content="([^"]+)"', html)
-    m3u8 = re.search(r'(https?://[^\s"\'<>]+\.cloudfront\.net[^\s"\'<>]*?\.m3u8[^\s"\'<>]*)', html)
-    if not m3u8: m3u8 = re.search(r'(https?://[^\s"\'<>]+\.m3u8[^\s"\'<>]*)', html)
-    if not m3u8: raise Exception("M3U8 Stream not found")
+    m3u8_match = re.search(r'(https?://[^\s"\'<>]+\.cloudfront\.net[^\s"\'<>]*?\.m3u8[^\s"\'<>]*)', html)
+    if not m3u8_match: m3u8_match = re.search(r'(https?://[^\s"\'<>]+\.m3u8[^\s"\'<>]*)', html)
+    if not m3u8_match: raise Exception("M3U8 Stream not found")
     ep_title = title.group(1).split("|")[0].strip() if title else "Episode"
-    return m3u8.group(1), ep_title, img.group(1) if img else None
+    return m3u8_match.group(1), ep_title, img.group(1) if img else None
 
 # ==========================================
 # 🔥 5. SERIES FETCHER + GUARANTEED FALLBACK
@@ -217,7 +214,6 @@ def get_series_data(series_url):
     resp = fetch_page(api_url, headers=headers, timeout=30)
     
     if resp.status_code == 403:
-        # 🔥 இங்கேதான் "The Unbreakable Kiwi Fallback" செயல்படும்!
         raise Exception(
             "❌ **All Bypass Layers Failed (TLS & Proxy). But don't worry, we have a 100% guarantee!**\n\n"
             "💡 **The Ultimate Kiwi Browser Console Hack:**\n"
