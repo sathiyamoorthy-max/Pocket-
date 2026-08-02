@@ -6,7 +6,6 @@ import uuid
 import tempfile
 import json
 import time
-import random
 import threading
 import sqlite3
 import requests
@@ -29,12 +28,32 @@ if not TOKEN:
     raise ValueError("No TELEGRAM_TOKEN found in environment variables")
 
 # ==========================================
+# 🔑 THE MASTER HACK: MOBILE API TOKENS
+# ==========================================
+# நண்பா, Kiwi Browser மூலம் நீங்கள் எடுத்த ஒரிஜினல் டோக்கன்களை இங்கே போடவும்!
+DEVICE_ID = ""  # எ.கா: "a1b2c3d4e5f6g7h8"
+AUTH_TOKEN = "" # எ.கா: "Bearer eyJhbGciOiJIUzI1NiIs..."
+
+MOBILE_HEADERS = {
+    "X-Device-Id": DEVICE_ID,
+    "Authorization": AUTH_TOKEN,
+    "Content-Type": "application/json",
+    "User-Agent": "PocketFM/6.5.0 (Android; 13; SM-G991B)"
+}
+
+WEB_HEADERS = {
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36',
+    'Referer': 'https://pocketfm.com/',
+    'Origin': 'https://pocketfm.com'
+}
+
+# ==========================================
 # 🌐 1. FLASK SERVER (For UptimeRobot)
 # ==========================================
 flask_app = Flask(__name__)
 @flask_app.route('/')
 def index():
-    return "Multi-Platform OTT Bot Online (Fixed Version)!"
+    return "Multi-Platform OTT Bot (API Mode) Online!"
 
 def run_flask():
     port = int(os.environ.get('PORT', 5000))
@@ -63,63 +82,8 @@ def log_download(user_id, platform):
     conn.close()
 
 # ==========================================
-# 🛡️ 3. POCKET FM SYSTEM (Headers + Proxy)
+# 🛡️ 3. POCKET FM SYSTEM (Mobile API Bypass)
 # ==========================================
-# 🔥 THE MOST IMPORTANT FIX: HEADERS EVERYWHERE
-HEADERS = {
-    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36',
-    'Referer': 'https://pocketfm.com/',
-    'Origin': 'https://pocketfm.com'
-}
-
-try:
-    from curl_cffi import requests as curl_requests
-    CURL_AVAILABLE = True
-except ImportError:
-    CURL_AVAILABLE = False
-
-PROXY_LIST = []
-LAST_PROXY_FETCH = 0
-
-def get_free_proxies():
-    global PROXY_LIST, LAST_PROXY_FETCH
-    if time.time() - LAST_PROXY_FETCH < 1800 and PROXY_LIST:
-        return PROXY_LIST
-    try:
-        url = "https://raw.githubusercontent.com/TheSpeedX/PROXY-List/master/http.txt"
-        response = requests.get(url, timeout=10)
-        if response.status_code == 200:
-            proxies = response.text.strip().split('\n')
-            PROXY_LIST = [p.strip() for p in proxies if re.match(r'\d+\.\d+\.\d+\.\d+:\d+', p.strip())]
-            random.shuffle(PROXY_LIST)
-            LAST_PROXY_FETCH = time.time()
-            return PROXY_LIST
-    except: pass
-    return ["103.163.118.217:8080"]
-
-def get_working_proxy():
-    proxies = get_free_proxies()
-    for proxy in proxies[:5]: # Test only top 5 to save time
-        try:
-            test_resp = requests.get("https://pocketfm.com", proxies={'http': f'http://{proxy}', 'https': f'http://{proxy}'}, timeout=3)
-            if test_resp.status_code == 200:
-                return {'http': f'http://{proxy}', 'https': f'http://{proxy}'}
-        except: continue
-    return None
-
-def fetch_page(url, headers=None, timeout=30, stream=False):
-    req_headers = headers if headers else HEADERS
-    if CURL_AVAILABLE and not stream:
-        try: return curl_requests.get(url, impersonate="chrome133", headers=req_headers, timeout=timeout)
-        except: pass
-    
-    proxy = get_working_proxy()
-    if proxy:
-        try: return requests.get(url, headers=req_headers, timeout=timeout, proxies=proxy, stream=stream)
-        except: pass
-        
-    return requests.get(url, headers=req_headers, timeout=timeout, stream=stream)
-
 TRACKER_FILE = 'series_cache.json'
 def load_tracker():
     if os.path.exists(TRACKER_FILE):
@@ -135,32 +99,26 @@ def get_series_data(series_url):
     match = re.search(r'/show/([a-zA-Z0-9_-]+)', series_url)
     if not match: raise Exception("Invalid Show URL format.")
     show_id = match.group(1).split('?')[0]
-    api_url = f"https://pocketfm.com/show/{show_id}"
     
-    resp = fetch_page(api_url, timeout=30)
-    if resp.status_code == 403: raise Exception("❌ 403 Blocked. IP Ban active.")
-
-    html = resp.text
-    title_match = re.search(r'<meta property="og:title" content="([^"]+)"', html)
-    series_title = title_match.group(1).split("|")[0].strip() if title_match else "Pocket FM Series"
-    json_match = re.search(r'<script id="__NEXT_DATA__" type="application/json">(.*?)</script>', html, re.DOTALL)
-    if not json_match: raise Exception("Next.js JSON payload not found.")
+    # 🔥 Mobile API மூலமாக டேட்டாவை எடுக்கிறோம் (Cloudflare/WAF-ஐ பைபாஸ் செய்கிறது)
+    api_url = f"https://api.pocketfm.com/api/v1/show/{show_id}"
+    resp = requests.get(api_url, headers=MOBILE_HEADERS, timeout=30)
     
-    data = json.loads(json_match.group(1))
-    episodes_map = []
+    if resp.status_code == 401 or resp.status_code == 403:
+        raise Exception("❌ API Token Expired. Please put a fresh `AUTH_TOKEN` in app.py")
+    if resp.status_code != 200:
+        raise Exception(f"API Error: {resp.status_code}")
+        
+    data = resp.json()
+    series_title = data.get('title', 'Pocket FM Series')
     
-    def extract_episodes(node):
-        if isinstance(node, dict):
-            ep_id = node.get('episodeId') or node.get('id')
-            if ep_id and isinstance(ep_id, str) and len(ep_id) > 10:
-                episodes_map.append({'url': f"https://pocketfm.com/episode/{ep_id}"})
-            for v in node.values(): extract_episodes(v)
-        elif isinstance(node, list):
-            for item in node: extract_episodes(item)
-            
-    extract_episodes(data)
-    unique_episodes = {ep['url']: ep for ep in episodes_map}.values()
-    return series_title, [ep['url'] for ep in unique_episodes]
+    episodes = data.get('episodes', [])
+    episode_urls = [f"https://pocketfm.com/episode/{ep['id']}" for ep in episodes if ep.get('id')]
+    
+    if not episode_urls:
+        raise Exception("Episodes not found in API response.")
+        
+    return series_title, episode_urls
 
 def download_chunk(args):
     i, seg_url, base_url, aes_key, iv, tmpdir = args
@@ -168,8 +126,8 @@ def download_chunk(args):
         full_url = seg_url if seg_url.startswith('http') else f"{base_url}/{seg_url}"
         ts_path = os.path.join(tmpdir, f"chunk_{i:04d}.ts")
         
-        # 🔥 FIX: Added Headers to Chunk Download
-        response = fetch_page(full_url, timeout=15, stream=True)
+        # 🔥 Chunks எடுக்கும்போதும் Mobile App போலவே செல்கிறோம்
+        response = requests.get(full_url, headers=MOBILE_HEADERS, stream=True, timeout=15)
         if response.status_code != 200:
             return i, None
             
@@ -185,19 +143,18 @@ def download_chunk(args):
         else:
             with open(ts_path, 'wb') as f: f.write(data)
         return i, ts_path
-    except Exception as e: 
+    except Exception: 
         return i, None
 
 def download_audio_from_m3u8(m3u8_url):
-    # 🔥 FIX: Manually fetching M3U8 with Headers instead of m3u8.load()
-    m3u8_content = fetch_page(m3u8_url).text
+    m3u8_content = requests.get(m3u8_url, headers=MOBILE_HEADERS).text
     playlist = m3u8.loads(m3u8_content, uri=m3u8_url)
     base_url = '/'.join(m3u8_url.split('/')[:-1])
     
     if not playlist.segments and playlist.playlists:
         m3u8_url = playlist.playlists[0].uri
         m3u8_url = m3u8_url if m3u8_url.startswith('http') else f"{base_url}/{m3u8_url}"
-        m3u8_content = fetch_page(m3u8_url).text
+        m3u8_content = requests.get(m3u8_url, headers=MOBILE_HEADERS).text
         playlist = m3u8.loads(m3u8_content, uri=m3u8_url)
         base_url = '/'.join(m3u8_url.split('/')[:-1])
 
@@ -206,8 +163,7 @@ def download_audio_from_m3u8(m3u8_url):
         key_uri = playlist.keys[0].uri
         iv = playlist.keys[0].iv
         key_url = key_uri if key_uri.startswith('http') else f"{base_url}/{key_uri}"
-        # 🔥 FIX: Added Headers to Key Fetch
-        aes_key = fetch_page(key_url).content
+        aes_key = requests.get(key_url, headers=MOBILE_HEADERS).content
 
     segments = [seg.uri for seg in playlist.segments]
     with tempfile.TemporaryDirectory() as tmpdir:
@@ -221,7 +177,7 @@ def download_audio_from_m3u8(m3u8_url):
                 
         ts_files = [ts_files_dict[i] for i in sorted(ts_files_dict.keys())]
         if not ts_files:
-            raise Exception("AWS CDN Blocked chunks. Check Headers or Proxy.")
+            raise Exception("AWS CDN Blocked chunks. Make sure your AUTH_TOKEN is fresh!")
 
         if not os.path.exists('downloads'): os.makedirs('downloads')
         unique_name = str(uuid.uuid4())[:8]
@@ -233,14 +189,14 @@ def download_audio_from_m3u8(m3u8_url):
         return output_file
 
 def get_episode_metadata(episode_url):
-    resp = fetch_page(episode_url, timeout=20)
-    if resp.status_code == 403: raise Exception("❌ 403 Blocked by Cloudflare.")
+    # Metadata எடுக்க Web Headers பயன்படும் (இங்கே WAF பெரிய தடை இல்லை)
+    resp = requests.get(episode_url, headers=WEB_HEADERS, timeout=20)
     html = resp.text
     title = re.search(r'<meta property="og:title" content="([^"]+)"', html)
     img = re.search(r'<meta property="og:image" content="([^"]+)"', html)
     m3u8 = re.search(r'(https?://[^\s"\'<>]+\.cloudfront\.net[^\s"\'<>]*?\.m3u8[^\s"\'<>]*)', html)
     if not m3u8: m3u8 = re.search(r'(https?://[^\s"\'<>]+\.m3u8[^\s"\'<>]*)', html)
-    if not m3u8: raise Exception("M3U8 Stream not found. VIP Episode?")
+    if not m3u8: raise Exception("M3U8 Stream not found.")
     ep_title = title.group(1).split("|")[0].strip() if title else "Episode"
     return m3u8.group(1), ep_title, img.group(1) if img else None
 
@@ -253,7 +209,7 @@ async def download_and_send_episode(update, context, ep_url, ep_num=None, total=
             t_id = str(uuid.uuid4())[:8]
             thumb_path = f"downloads/thumb_{t_id}.jpg"
             try:
-                img_data = fetch_page(thumb_url).content
+                img_data = requests.get(thumb_url).content
                 with open(thumb_path, 'wb') as f: f.write(img_data)
                 Image.open(thumb_path).convert('RGB').thumbnail((320, 320)).save(thumb_path, 'JPEG')
             except: pass
@@ -272,6 +228,10 @@ async def download_and_send_episode(update, context, ep_url, ep_num=None, total=
         await update.message.reply_text(f"❌ Error: {e}")
 
 async def process_pocketfm(update: Update, context: ContextTypes.DEFAULT_TYPE, url: str):
+    if not DEVICE_ID or not AUTH_TOKEN:
+        await update.message.reply_text("❌ **API Token Missing!**\nAdmin, please put your `DEVICE_ID` and `AUTH_TOKEN` inside app.py!")
+        return
+
     msg = await update.message.reply_text("🔍 Processing PocketFM link...")
     try:
         if url.count('/episode/') > 1 or '\n' in url:
@@ -283,7 +243,7 @@ async def process_pocketfm(update: Update, context: ContextTypes.DEFAULT_TYPE, u
             
         elif '/show/' in url:
             url_clean = url.split('|')[0].strip()
-            await msg.edit_text("🔄 Fetching Series...")
+            await msg.edit_text("🔄 Fetching Series from PocketFM API...")
             title, eps = await asyncio.to_thread(get_series_data, url_clean)
             tracker = load_tracker()
             show_id = url_clean.split('/show/')[1].strip('/')
