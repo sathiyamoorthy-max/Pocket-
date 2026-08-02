@@ -8,15 +8,15 @@ import tempfile
 import json
 import threading
 import time
-import math
 import random
 import requests
+from dotenv import load_dotenv
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from PIL import Image
 
 # Flask & Telegram
 from flask import Flask
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 
 # M3U8 & Crypto
@@ -25,85 +25,95 @@ from Crypto.Cipher import AES
 from Crypto.Util.Padding import unpad
 import yt_dlp
 
-# ==========================================
-# 🔥 1. CLOUDFLARE TLS BYPASS & HEADERS
-# ==========================================
-# எல்லா ரெக்வெஸ்ட்களுக்கும் இந்த குரோம் ஹெடர் கட்டாயம்!
-BASE_HEADERS = {
-    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36',
-    'Referer': 'https://pocketfm.com/',
-    'Origin': 'https://pocketfm.com'
-}
+load_dotenv()
 
+# ==========================================
+# 🔥 1. TLS FINGERPRINT BYPASS (JA3 Impersonation)
+# ==========================================
 try:
     from curl_cffi import requests as curl_requests
     CURL_AVAILABLE = True
-    print("✅ curl_cffi Loaded! Cloudflare TLS Bypass Active.")
+    print("✅ curl_cffi Loaded! Cloudflare JA3 Bypass Active.")
 except ImportError:
     CURL_AVAILABLE = False
-    print("⚠️ curl_cffi not installed. Falling back to requests.")
+    import requests as curl_requests
+    print("⚠️ curl_cffi missing. Falling back to requests.")
 
 # ==========================================
-# 🔥 2. SMART PROXY ROTATOR (IP BYPASS)
+# 🔥 2. INTELLIGENT PROXY ROTATOR (The Ultimate IP Bypass)
 # ==========================================
-PROXY_LIST = []
-LAST_PROXY_FETCH = 0
+PROXY_POOL = []
+LAST_FETCH_TIME = 0
 
-def get_free_proxies():
-    global PROXY_LIST, LAST_PROXY_FETCH
-    if time.time() - LAST_PROXY_FETCH < 1800 and PROXY_LIST:
-        return PROXY_LIST
+def fetch_and_validate_proxies():
+    global PROXY_POOL, LAST_FETCH_TIME
+    if time.time() - LAST_FETCH_TIME < 1800 and PROXY_POOL:
+        return PROXY_POOL
     try:
+        # உலகின் மிகப்பெரிய இலவச Proxy லிஸ்ட்
         url = "https://raw.githubusercontent.com/TheSpeedX/PROXY-List/master/http.txt"
         response = requests.get(url, timeout=10)
         if response.status_code == 200:
-            proxies = response.text.strip().split('\n')
-            PROXY_LIST = [p.strip() for p in proxies if re.match(r'\d+\.\d+\.\d+\.\d+:\d+', p.strip())]
-            random.shuffle(PROXY_LIST)
-            LAST_PROXY_FETCH = time.time()
-            print(f"🔄 Refreshed {len(PROXY_LIST)} proxies.")
-            return PROXY_LIST
-    except:
-        pass
-    return ["103.163.118.217:8080"]
+            raw_list = response.text.strip().split('\n')
+            valid_proxies = []
+            for p in raw_list:
+                p = p.strip()
+                if re.match(r'\d+\.\d+\.\d+\.\d+:\d+', p):
+                    # வேகமான Proxy-ஐ மட்டும் வடிகட்ட சிறிய டெஸ்ட்
+                    try:
+                        test = requests.get("https://pocketfm.com", proxies={'http': f'http://{p}', 'https': f'http://{p}'}, timeout=4)
+                        if test.status_code == 200:
+                            valid_proxies.append(p)
+                    except:
+                        pass
+            PROXY_POOL = valid_proxies
+            random.shuffle(PROXY_POOL)
+            LAST_FETCH_TIME = time.time()
+            print(f"🔄 Found {len(PROXY_POOL)} working proxies.")
+            return PROXY_POOL
+    except Exception as e:
+        print(f"⚠️ Proxy List fetch error: {e}")
+    return []
 
-def get_working_proxy():
-    proxies = get_free_proxies()
-    for proxy in proxies[:5]:  # முதல் 5 ப்ராக்ஸிகளை மட்டும் செக் செய்வோம்
-        try:
-            test_resp = requests.get("https://pocketfm.com", headers=BASE_HEADERS, proxies={'http': f'http://{proxy}', 'https': f'http://{proxy}'}, timeout=3)
-            if test_resp.status_code == 200:
-                print(f"✅ Found working proxy: {proxy}")
-                return {'http': f'http://{proxy}', 'https': f'http://{proxy}'}
-        except:
-            continue
+def get_random_proxy():
+    proxies = fetch_and_validate_proxies()
+    if proxies:
+        p = random.choice(proxies)
+        return {'http': f'http://{p}', 'https': f'http://{p}'}
     return None
 
-# 🌍 MASTER FETCHER (இப்போது ஸ்ட்ரீமிங்கும் சப்போர்ட் செய்யும்)
-def fetch_page(url, headers=None, timeout=30, stream=False):
-    req_headers = headers if headers else BASE_HEADERS
+# ==========================================
+# 🌍 3. THE MASTER FETCHER (Curl -> Proxy -> Fallback)
+# ==========================================
+def fetch_page(url, headers=None, timeout=30, retries=3):
+    # 1. முதலில் curl_cffi மூலம் முயற்சி (இது IP தேவையில்லை, JS ஹேண்ட்ஷேக்)
+    if CURL_AVAILABLE:
+        for _ in range(2): # 2 முறை முயற்சி
+            try:
+                return curl_requests.get(url, impersonate="chrome133", headers=headers, timeout=timeout)
+            except Exception as e:
+                print(f"⚠️ Curl attempt failed: {e}")
     
-    if CURL_AVAILABLE and not stream:
-        try:
-            return curl_requests.get(url, impersonate="chrome133", headers=req_headers, timeout=timeout)
-        except Exception:
-            pass
+    # 2. அடுத்து Proxy Rotator (IP மாற்றம்)
+    for _ in range(retries):
+        proxy = get_random_proxy()
+        if proxy:
+            try:
+                print(f"🛡️ Trying proxy: {proxy['http']}")
+                return requests.get(url, headers=headers, timeout=timeout, proxies=proxy)
+            except:
+                continue
     
-    proxy = get_working_proxy()
-    if proxy:
-        try:
-            return requests.get(url, headers=req_headers, timeout=timeout, proxies=proxy, stream=stream)
-        except:
-            pass
-    
-    return requests.get(url, headers=req_headers, timeout=timeout, stream=stream)
+    # 3. கடைசி முயற்சி: Render இருந்து நேரடி IP
+    print("⚠️ Trying direct Render IP (last resort).")
+    return requests.get(url, headers=headers, timeout=timeout)
 
 # ==========================================
-# 📅 3. CONFIG
+# 📅 4. CONFIG & FUTURE TRACKER
 # ==========================================
 TOKEN = os.getenv("TELEGRAM_TOKEN")
 if not TOKEN:
-    raise ValueError("No TELEGRAM_TOKEN found. Please add it to Render Environment Variables.")
+    raise ValueError("TELEGRAM_TOKEN missing in env")
 
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -111,7 +121,7 @@ logger = logging.getLogger(__name__)
 flask_app = Flask(__name__)
 @flask_app.route('/')
 def index():
-    return "Ultimate Hybrid Bot is online!"
+    return "Ultimate Rotating Bot Online!"
 
 def run_flask():
     port = int(os.environ.get('PORT', 5000))
@@ -132,19 +142,14 @@ def save_tracker(data):
         json.dump(data, f)
 
 # ==========================================
-# 🎵 4. CORE DOWNLOAD ENGINE (BUG FIXED)
+# 🎵 5. DOWNLOAD ENGINE (M3U8, AES, FFMPEG)
 # ==========================================
 def download_chunk(args):
     i, seg_url, base_url, aes_key, iv, tmpdir = args
     try:
         full_url = seg_url if seg_url.startswith('http') else f"{base_url}/{seg_url}"
         ts_path = os.path.join(tmpdir, f"chunk_{i:04d}.ts")
-        
-        # 🔥 FIX: Chunks எடுக்கும்போதும் Headers கட்டாயம் தேவை!
-        response = fetch_page(full_url, stream=True, timeout=15)
-        if response.status_code != 200:
-            return i, None
-            
+        response = requests.get(full_url, stream=True, timeout=15)
         data = response.content
         if aes_key and iv:
             iv_bytes = bytes.fromhex(iv.replace('0x', '')) if isinstance(iv, str) else iv
@@ -161,16 +166,12 @@ def download_chunk(args):
         return i, None
 
 def download_audio_from_m3u8(m3u8_url):
-    # 🔥 FIX: m3u8.load() பைத்தானைக் காட்டிக் கொடுத்துவிடும். அதனால் fetch_page பயன்படுத்துகிறோம்.
-    m3u8_content = fetch_page(m3u8_url).text
-    playlist = m3u8.loads(m3u8_content, uri=m3u8_url)
+    playlist = m3u8.load(m3u8_url)
     base_url = '/'.join(m3u8_url.split('/')[:-1])
-    
     if not playlist.segments and playlist.playlists:
         m3u8_url = playlist.playlists[0].uri
         m3u8_url = m3u8_url if m3u8_url.startswith('http') else f"{base_url}/{m3u8_url}"
-        m3u8_content = fetch_page(m3u8_url).text
-        playlist = m3u8.loads(m3u8_content, uri=m3u8_url)
+        playlist = m3u8.load(m3u8_url)
         base_url = '/'.join(m3u8_url.split('/')[:-1])
         
     aes_key, iv = None, None
@@ -178,14 +179,13 @@ def download_audio_from_m3u8(m3u8_url):
         key_uri = playlist.keys[0].uri
         iv = playlist.keys[0].iv
         key_url = key_uri if key_uri.startswith('http') else f"{base_url}/{key_uri}"
-        # 🔥 FIX: Key எடுக்கும்போதும் Headers கட்டாயம் தேவை!
-        aes_key = fetch_page(key_url).content
+        aes_key = requests.get(key_url).content
 
     segments = [seg.uri for seg in playlist.segments]
     with tempfile.TemporaryDirectory() as tmpdir:
         tasks = [(i, seg, base_url, aes_key, iv, tmpdir) for i, seg in enumerate(segments)]
         ts_files_dict = {}
-        with ThreadPoolExecutor(max_workers=5) as executor:  # 10 workers இருந்தால் AWS பிளாக் செய்யும், அதனால் 5 ஆக குறைத்துள்ளேன்
+        with ThreadPoolExecutor(max_workers=10) as executor:
             futures = [executor.submit(download_chunk, arg) for arg in tasks]
             for future in as_completed(futures):
                 idx, path = future.result()
@@ -193,9 +193,6 @@ def download_audio_from_m3u8(m3u8_url):
                     ts_files_dict[idx] = path
         ts_files = [ts_files_dict[i] for i in sorted(ts_files_dict.keys())]
         
-        if not ts_files:
-            raise Exception("CDN Blocked chunks. Fallback to Kiwi Hack.")
-            
         if not os.path.exists('downloads'): os.makedirs('downloads')
         unique_name = str(uuid.uuid4())[:8]
         output_file = f"downloads/audio_{unique_name}.mp3"
@@ -207,59 +204,19 @@ def download_audio_from_m3u8(m3u8_url):
         return output_file
 
 def get_episode_metadata(episode_url):
-    resp = fetch_page(episode_url, timeout=20)
+    headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36'}
+    resp = fetch_page(episode_url, headers=headers, timeout=20)
     if resp.status_code == 403:
         raise Exception("403 Blocked. Try Multi-Link mode.")
     
     html = resp.text
     title = re.search(r'<meta property="og:title" content="([^"]+)"', html)
     img = re.search(r'<meta property="og:image" content="([^"]+)"', html)
-    m3u8_match = re.search(r'(https?://[^\s"\'<>]+\.cloudfront\.net[^\s"\'<>]*?\.m3u8[^\s"\'<>]*)', html)
-    if not m3u8_match: m3u8_match = re.search(r'(https?://[^\s"\'<>]+\.m3u8[^\s"\'<>]*)', html)
-    if not m3u8_match: raise Exception("M3U8 Stream not found")
+    m3u8 = re.search(r'(https?://[^\s"\'<>]+\.cloudfront\.net[^\s"\'<>]*?\.m3u8[^\s"\'<>]*)', html)
+    if not m3u8: m3u8 = re.search(r'(https?://[^\s"\'<>]+\.m3u8[^\s"\'<>]*)', html)
+    if not m3u8: raise Exception("M3U8 Stream not found")
     ep_title = title.group(1).split("|")[0].strip() if title else "Episode"
-    return m3u8_match.group(1), ep_title, img.group(1) if img else None
-
-# ==========================================
-# 🔥 5. SERIES FETCHER + GUARANTEED FALLBACK
-# ==========================================
-def get_series_data(series_url):
-    match = re.search(r'/show/([a-zA-Z0-9_-]+)', series_url)
-    show_id = match.group(1).split('?')[0]
-    api_url = f"https://pocketfm.com/show/{show_id}"
-    
-    resp = fetch_page(api_url, timeout=30)
-    
-    if resp.status_code == 403:
-        raise Exception(
-            "❌ **All Bypass Layers Failed (TLS & Proxy). But don't worry, we have a 100% guarantee!**\n\n"
-            "💡 **The Ultimate Kiwi Browser Console Hack:**\n"
-            "1. Open the Show page in **Kiwi Browser**.\n"
-            "2. Tap `...` -> `Developer Tools` -> `Console`.\n"
-            "3. Copy & Paste the code below and hit Enter:\n"
-            "`document.querySelectorAll('a[href*=\"/episode/\"]').forEach(a => { if(a.href) console.log(a.href); });`\n"
-            "4. **Copy the output list** (Ep 1, Ep 2, Ep 3...) and **paste ALL links** here in ONE message.\n"
-            "⚡ The bot will automatically download them ALL in Batch mode!"
-        )
-
-    html = resp.text
-    title_match = re.search(r'<meta property="og:title" content="([^"]+)"', html)
-    series_title = title_match.group(1).split("|")[0].strip() if title_match else "Pocket FM Series"
-    json_match = re.search(r'<script id="__NEXT_DATA__" type="application/json">(.*?)</script>', html, re.DOTALL)
-    if not json_match: raise Exception("JSON not found.")
-    data = json.loads(json_match.group(1))
-    
-    eps = []
-    def extract(node):
-        if isinstance(node, dict):
-            eid = node.get('episodeId') or node.get('id')
-            if eid and len(str(eid)) > 10:
-                eps.append(f"https://pocketfm.com/episode/{eid}")
-            for k, v in node.items(): extract(v)
-        elif isinstance(node, list):
-            for i in node: extract(i)
-    extract(data)
-    return series_title, list(dict.fromkeys(eps))
+    return m3u8.group(1), ep_title, img.group(1) if img else None
 
 async def download_and_send_episode(update, context, ep_url, ep_num=None, total=None):
     try:
@@ -270,11 +227,11 @@ async def download_and_send_episode(update, context, ep_url, ep_num=None, total=
             t_id = str(uuid.uuid4())[:8]
             thumb_path = f"downloads/thumb_{t_id}.jpg"
             try:
-                img_data = fetch_page(thumb_url).content
+                img_data = requests.get(thumb_url).content
                 with open(thumb_path, 'wb') as f: f.write(img_data)
                 Image.open(thumb_path).convert('RGB').thumbnail((320, 320)).save(thumb_path, 'JPEG')
             except: pass
-        display_title = f"[{ep_num}/{total}] {title}" if ep_num and total else title
+        display_title = f"{title}" if not ep_num else f"[{ep_num}/{total}] {title}"
         with open(audio_path, 'rb') as audio:
             thumb_file = open(thumb_path, 'rb') if thumb_path and os.path.exists(thumb_path) else None
             await context.bot.send_audio(update.effective_chat.id, audio=audio, title=display_title, performer="Pocket FM", thumbnail=thumb_file)
@@ -285,14 +242,56 @@ async def download_and_send_episode(update, context, ep_url, ep_num=None, total=
         await update.message.reply_text(f"❌ Error: {e}")
 
 # ==========================================
-# 🤖 6. BOT HANDLERS
+# 🔥 6. SMART SERIES PARSER WITH ULTIMATE FALLBACK
+# ==========================================
+def get_series_data(series_url):
+    match = re.search(r'/show/([a-zA-Z0-9_-]+)', series_url)
+    show_id = match.group(1).split('?')[0]
+    api_url = f"https://pocketfm.com/show/{show_id}"
+    headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36'}
+    
+    resp = fetch_page(api_url, headers=headers, timeout=30)
+    
+    # 🔥 ULTIMATE 100% GUARANTEED FALLBACK
+    if resp.status_code == 403:
+        raise Exception(
+            "❌ **All Render Proxy Layers Blocked (IP Blacklisted).**\n\n"
+            "💡 **The Unbreakable Multi-Link Bypass Guide:**\n"
+            "1. Open this Series page in your **Kiwi Browser**.\n"
+            "2. Tap `...` (Menu) -> `Developer Tools` -> `Console`.\n"
+            "3. Copy & Paste this JS code and press Enter:\n"
+            "   `document.querySelectorAll('a[href*=\"/episode/\"]').forEach(a => { if(a.href) console.log(a.href); });`\n"
+            "4. **Copy ALL the links** from the console output and **paste them ALL in ONE message** here. I will download them in BATCH mode instantly!"
+        )
+    
+    html = resp.text
+    title_match = re.search(r'<meta property="og:title" content="([^"]+)"', html)
+    series_title = title_match.group(1).split("|")[0].strip() if title_match else "Pocket FM Series"
+    json_match = re.search(r'<script id="__NEXT_DATA__" type="application/json">(.*?)</script>', html, re.DOTALL)
+    if not json_match: raise Exception("Next.js JSON not found.")
+    data = json.loads(json_match.group(1))
+    
+    episodes = []
+    def extract(node):
+        if isinstance(node, dict):
+            eid = node.get('episodeId') or node.get('id')
+            if eid and len(str(eid)) > 10:
+                episodes.append(f"https://pocketfm.com/episode/{eid}")
+            for k, v in node.items(): extract(v)
+        elif isinstance(node, list):
+            for item in node: extract(item)
+    extract(data)
+    return series_title, list(dict.fromkeys(episodes))
+
+# ==========================================
+# 🤖 7. TELEGRAM HANDLERS
 # ==========================================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "🔥 **Ultimate Hybrid Bot is Online!**\n\n"
-        "✅ TLS & Proxy bypass active.\n"
-        "✅ If blocked, the bot will guide you to the **100% guaranteed Kiwi Console hack**.\n"
-        "Send a Pocket FM `/show/` or `/episode/` link."
+        "🔥 **World Class Rotating Bot is Online!**\n\n"
+        "✅ Uses **JA3 TLS Impersonation** + **IP Proxy Rotation**.\n"
+        "✅ If completely blocked, it will give you the **Kiwi Browser Manual Hack** guide.\n\n"
+        "📌 Send any `/show/` or `/episode/` link."
     )
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -300,19 +299,22 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = await update.message.reply_text("🔍 Analysing...")
 
     try:
-        # Multi-Link Batch (The Safe Bypass)
+        # ✨ Batch Multi-Link (The Ultimate Safe Mode)
         if text.count('/episode/') > 1 or '\n' in text:
             urls = [l.strip() for l in text.split('\n') if '/episode/' in l]
-            await msg.edit_text(f"🚀 Found {len(urls)} links. Downloading batch...")
+            if not urls:
+                await msg.edit_text("❌ No valid links found.")
+                return
+            await msg.edit_text(f"🚀 Found {len(urls)} links. Batch downloading...")
             for i, u in enumerate(urls, 1):
                 await download_and_send_episode(update, context, u, i, len(urls))
-            await msg.edit_text(f"✅ Batch Done!")
+            await msg.edit_text(f"✅ Batch Complete!")
             return
 
-        # Series Mode
+        # 🎬 Series Mode
         elif '/show/' in text:
             url = text.split('|')[0].strip()
-            await msg.edit_text("🔄 Trying TLS & Proxy layers...")
+            await msg.edit_text("🔄 Bypassing with TLS + Rotating Proxies...")
             title, eps = await asyncio.to_thread(get_series_data, url)
             total = len(eps)
             
@@ -325,7 +327,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await msg.edit_text(f"📊 {title}\nTotal: {total}\n✅ No new episodes.")
                 return
 
-            await msg.edit_text(f"✅ Found {len(new)} new eps. Downloading...")
+            await msg.edit_text(f"✅ Found {len(new)} new eps. Starting download...")
             for i, ep in enumerate(new, 1):
                 await download_and_send_episode(update, context, ep, i, len(new))
                 await asyncio.sleep(2)
@@ -335,16 +337,18 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await msg.edit_text(f"🎉 Complete! {len(new)} eps sent.")
             return
 
+        # 🎵 Single Episode
         elif '/episode/' in text:
             await download_and_send_episode(update, context, text)
             await msg.delete()
             return
 
         else:
-            await msg.edit_text("❌ Invalid Link.")
+            await msg.edit_text("❌ Invalid Link. Send `/episode/...` or `/show/...`.")
 
     except Exception as e:
-        await msg.edit_text(f"❌ System Message: {e}")
+        # இந்த பிழை மெசேஜில் Kiwi Browser வழிகாட்டி வரும்
+        await msg.edit_text(str(e))
 
 def run_bot():
     app = Application.builder().token(TOKEN).build()
