@@ -5,4 +5,4 @@ m3u8
 pycryptodome
 Pillow
 yt-dlp
-curl_cffi
+python-dotenv
