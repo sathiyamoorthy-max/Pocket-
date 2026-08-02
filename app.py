@@ -10,6 +10,7 @@ import threading
 import time
 import math
 import random
+import requests  # ✅ இந்த லைன் சேர்த்தேன் (பிழை சரி!)
 from dotenv import load_dotenv
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from PIL import Image
@@ -36,8 +37,6 @@ try:
     print("✅ curl_cffi Loaded! Cloudflare TLS Bypass Active.")
 except ImportError:
     CURL_AVAILABLE = False
-    import requests as curl_requests
-    import requests
     print("⚠️ curl_cffi not installed. Falling back to requests.")
 
 # ==========================================
@@ -52,6 +51,7 @@ def get_free_proxies():
         return PROXY_LIST
     try:
         url = "https://raw.githubusercontent.com/TheSpeedX/PROXY-List/master/http.txt"
+        # ✅ இங்கே requests சரியாக வேலை செய்யும்
         response = requests.get(url, timeout=10)
         if response.status_code == 200:
             proxies = response.text.strip().split('\n')
@@ -60,8 +60,8 @@ def get_free_proxies():
             LAST_PROXY_FETCH = time.time()
             print(f"🔄 Refreshed {len(PROXY_LIST)} proxies.")
             return PROXY_LIST
-    except:
-        pass
+    except Exception as e:
+        print(f"⚠️ Proxy fetch error: {e}")
     return ["103.163.118.217:8080", "45.79.66.195:3128"] # Fallback
 
 def get_working_proxy():
