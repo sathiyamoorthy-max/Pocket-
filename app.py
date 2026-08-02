@@ -29,7 +29,6 @@ if not TOKEN:
 # ==========================================
 # 🍪 THE MASTER HACK: YOUR WEB COOKIE
 # ==========================================
-# நண்பா, ஸ்கிரீன்ஷாட்டில் நீங்கள் கண்டுபிடித்த அந்த முழு Cookie வரியையும் கீழே போடவும்.
 MY_SECRET_COOKIE = os.environ.get("POCKET_COOKIE", "இங்கே_உங்கள்_முழு_COOKIE_ஐ_பேஸ்ட்_செய்யவும்")
 
 HEADERS = {
@@ -139,7 +138,14 @@ def download_chunk(args):
         full_url = seg_url if seg_url.startswith('http') else f"{base_url}/{seg_url}"
         ts_path = os.path.join(tmpdir, f"chunk_{i:04d}.ts")
         
-        response = fetch_page(full_url, stream=True, timeout=20)
+        # 🔥 HACK: Cookie Stripping Mode (Cloudfront-ஐ ஏமாற்ற Cookie-ஐ நீக்குகிறோம்)
+        clean_headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+            'Referer': 'https://pocketfm.com/',
+            'Origin': 'https://pocketfm.com'
+        }
+        
+        response = requests.get(full_url, headers=clean_headers, stream=True, timeout=20)
         if response.status_code != 200: return i, None
             
         data = response.content
@@ -173,6 +179,7 @@ def download_audio_from_m3u8(m3u8_url):
         key_uri = playlist.keys[0].uri
         iv = playlist.keys[0].iv
         key_url = key_uri if key_uri.startswith('http') else f"{base_url}/{key_uri}"
+        # Key எடுக்க மட்டும் Cookie-ஐப் பயன்படுத்துகிறோம்
         aes_key = fetch_page(key_url).content
 
     segments = [seg.uri for seg in playlist.segments]
@@ -186,7 +193,7 @@ def download_audio_from_m3u8(m3u8_url):
                 if path: ts_files_dict[idx] = path
                 
         ts_files = [ts_files_dict[i] for i in sorted(ts_files_dict.keys())]
-        if not ts_files: raise Exception("AWS CDN Blocked chunks. Cookie expired or IP banned.")
+        if not ts_files: raise Exception("AWS CDN Blocked chunks even without Cookie.")
 
         if not os.path.exists('downloads'): os.makedirs('downloads')
         unique_name = str(uuid.uuid4())[:8]
