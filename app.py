@@ -16,7 +16,7 @@ from PIL import Image
 
 from flask import Flask
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, filters, ContextTypes
+from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, filters, ContextTypes, ConversationHandler
 
 import m3u8
 from Crypto.Cipher import AES
@@ -26,22 +26,22 @@ import yt_dlp
 load_dotenv()
 
 # ==========================================
-# 🔥 1. CONFIGURATION (TOKEN & DEVICE ID)
+# 🔥 CONFIGURATION (கட்டமைப்பு)
 # ==========================================
 TOKEN = os.getenv("TELEGRAM_TOKEN")
-POCKET_TOKEN = os.getenv("POCKET_TOKEN")  # "Bearer eyJ..." Full token
+if not TOKEN:
+    raise ValueError("TELEGRAM_TOKEN environment variable missing.")
+
+# Pocket FM API Endpoints (உங்கள் HTTP Injector லாக்-களில் இருந்து இவற்றை மாற்றவும்)
+BASE_API = "https://api.pocketfm.com/api/v1"
+LOGIN_URL = f"{BASE_API}/auth/otp/request"    # OTP கேட்கும் URL
+VERIFY_URL = f"{BASE_API}/auth/otp/verify"    # OTP சரிபார்க்கும் URL
 DEVICE_ID = os.getenv("DEVICE_ID", "OPPO_CPH2219")
 
-if not TOKEN or not POCKET_TOKEN:
-    raise ValueError("TELEGRAM_TOKEN and POCKET_TOKEN must be set in environment variables.")
-
-# ==========================================
-# 📱 2. POCKET FM MOBILE API SETUP
-# ==========================================
-POCKET_API_BASE = "https://api.pocketfm.com/api/v1"
-POCKET_HEADERS = {
+# Token-ஐ சேமிக்கும் ஃபைல்
+TOKEN_FILE = "pocket_token.json"
+DEFAULT_HEADERS = {
     "X-Device-Id": DEVICE_ID,
-    "Authorization": POCKET_TOKEN,
     "Content-Type": "application/json",
     "User-Agent": "PocketFM/6.5.0 (Android; 13; SM-G991B)"
 }
@@ -59,56 +59,126 @@ def run_flask():
     flask_app.run(host='0.0.0.0', port=port)
 
 # ==========================================
-# 📅 3. FUTURE EPISODE TRACKER
+# 🔐 TOKEN MANAGEMENT (Login & Storage)
 # ==========================================
-TRACKER_FILE = 'series_cache.json'
-def load_tracker():
-    if os.path.exists(TRACKER_FILE):
+def save_token(token):
+    with open(TOKEN_FILE, 'w') as f:
+        json.dump({"token": token, "timestamp": time.time()}, f)
+
+def load_token():
+    if os.path.exists(TOKEN_FILE):
         try:
-            with open(TRACKER_FILE, 'r') as f:
-                return json.load(f)
+            with open(TOKEN_FILE, 'r') as f:
+                data = json.load(f)
+                if time.time() - data['timestamp'] < 86400:  # 24 மணி நேரம்
+                    return data['token']
         except:
-            return {}
-    return {}
+            pass
+    return None
 
-def save_tracker(data):
-    with open(TRACKER_FILE, 'w') as f:
-        json.dump(data, f)
+def get_headers():
+    token = load_token()
+    if token:
+        headers = DEFAULT_HEADERS.copy()
+        headers["Authorization"] = f"Bearer {token}"
+        return headers
+    return DEFAULT_HEADERS
 
 # ==========================================
-# 🔥 4. API FUNCTIONS (Get Series & Episode Data)
+# 📞 LOGIN CONVERSATION (Phone + OTP)
+# ==========================================
+PHONE, OTP = range(2)
+
+async def login_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text(
+        "📞 **Login to Pocket FM**\n\n"
+        "Please send your mobile number with country code (e.g., `+919087821263`).\n"
+        "We will send you an OTP."
+    )
+    return PHONE
+
+async def get_phone(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    phone = update.message.text.strip()
+    if not re.match(r'^\+\d{10,15}$', phone):
+        await update.message.reply_text("❌ Invalid format. Use country code like `+919087821263`.")
+        return PHONE
+
+    context.user_data['phone'] = phone
+    try:
+        # 🔥 OTP Request API
+        resp = requests.post(LOGIN_URL, json={"phone": phone}, headers=DEFAULT_HEADERS, timeout=15)
+        if resp.status_code == 200:
+            await update.message.reply_text(f"✅ OTP sent to {phone}\n\nPlease enter the 6-digit OTP.")
+            return OTP
+        else:
+            await update.message.reply_text(f"❌ API Error: {resp.status_code} - {resp.text}")
+            return ConversationHandler.END
+    except Exception as e:
+        await update.message.reply_text(f"❌ Error: {e}")
+        return ConversationHandler.END
+
+async def verify_otp(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    otp = update.message.text.strip()
+    if not otp.isdigit() or len(otp) != 6:
+        await update.message.reply_text("❌ Invalid OTP. Please enter 6 digits.")
+        return OTP
+
+    phone = context.user_data.get('phone')
+    try:
+        # 🔥 OTP Verify API
+        payload = {"phone": phone, "otp": otp}
+        resp = requests.post(VERIFY_URL, json=payload, headers=DEFAULT_HEADERS, timeout=15)
+        if resp.status_code == 200:
+            data = resp.json()
+            token = data.get('data', {}).get('token')
+            if token:
+                save_token(token)
+                await update.message.reply_text("🎉 **Login Successful!** Token saved. You can now download episodes without 403 errors.")
+                return ConversationHandler.END
+            else:
+                await update.message.reply_text("❌ Token not found in response. Please check API.")
+                return ConversationHandler.END
+        else:
+            await update.message.reply_text(f"❌ Verification failed: {resp.status_code} - {resp.text}")
+            return ConversationHandler.END
+    except Exception as e:
+        await update.message.reply_text(f"❌ Error: {e}")
+        return ConversationHandler.END
+
+async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("🚫 Login cancelled.")
+    return ConversationHandler.END
+
+# ==========================================
+# 📦 SERIES & EPISODE API FUNCTIONS
 # ==========================================
 def fetch_series_data(series_url):
-    """Get series info and episode list via API."""
     match = re.search(r'/show/([a-zA-Z0-9_-]+)', series_url)
     if not match:
         raise Exception("Invalid series URL format.")
     show_id = match.group(1).split('?')[0]
     
-    api_url = f"{POCKET_API_BASE}/show/{show_id}"
-    resp = requests.get(api_url, headers=POCKET_HEADERS, timeout=30)
+    headers = get_headers()
+    resp = requests.get(f"{BASE_API}/show/{show_id}", headers=headers, timeout=30)
     if resp.status_code == 401:
-        raise Exception("POCKET_TOKEN expired or invalid. Use /renew to update.")
+        raise Exception("Token expired. Use /login to refresh.")
     if resp.status_code != 200:
         raise Exception(f"API error: {resp.status_code}")
     
     data = resp.json()
     series_title = data.get('title', 'Unknown Series')
-    
-    # Get episodes (might be paginated, but we'll take first page)
     episodes = data.get('episodes', [])
     episode_urls = [f"https://pocketfm.com/episode/{ep['id']}" for ep in episodes if ep.get('id')]
     return series_title, episode_urls
 
 def fetch_episode_stream(episode_url):
-    """Fetch M3U8 stream URL and metadata using API."""
     match = re.search(r'/episode/([a-zA-Z0-9_-]+)', episode_url)
     if not match:
         raise Exception("Invalid episode URL.")
     episode_id = match.group(1).split('?')[0]
     
-    api_url = f"{POCKET_API_BASE}/episode/{episode_id}"
-    resp = requests.get(api_url, headers=POCKET_HEADERS, timeout=20)
+    headers = get_headers()
+    resp = requests.get(f"{BASE_API}/episode/{episode_id}", headers=headers, timeout=20)
     if resp.status_code == 401:
         raise Exception("Token expired.")
     if resp.status_code != 200:
@@ -117,20 +187,17 @@ def fetch_episode_stream(episode_url):
     data = resp.json()
     title = data.get('title', 'Episode')
     thumbnail = data.get('imageUrl') or data.get('thumbnail')
-    # The audio URL is usually in data['audioUrl'] or data['streamUrl']
     stream_url = data.get('audioUrl') or data.get('streamUrl')
     if not stream_url:
-        # Fallback to M3U8 from embedded data
-        # Sometimes it's under data['playbackInfo']['url']
         playback = data.get('playbackInfo')
         if playback:
             stream_url = playback.get('url')
     if not stream_url:
-        raise Exception("No audio stream URL found in API response.")
+        raise Exception("No audio stream URL found.")
     return stream_url, title, thumbnail
 
 # ==========================================
-# 🎵 5. DOWNLOAD ENGINE (M3U8, AES, FFMPEG)
+# 🎵 DOWNLOAD ENGINE (M3U8 + AES + FFMPEG)
 # ==========================================
 def download_chunk(args):
     i, seg_url, base_url, aes_key, iv, tmpdir = args
@@ -197,29 +264,27 @@ def download_audio_from_m3u8(m3u8_url):
         return output_file
 
 # ==========================================
-# 🤖 6. TELEGRAM HANDLERS
+# 🤖 TELEGRAM HANDLERS
 # ==========================================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "🔥 **Ultimate Pocket FM Bot (API Mode)**\n\n"
-        "✅ Uses your personal JWT token to bypass all restrictions.\n"
-        "✅ Supports:\n"
-        "• Single episode download: `/episode/...`\n"
-        "• Full series download: `/show/...`\n"
-        "• Batch multiple episodes: paste many `/episode/` links in one message\n"
-        "• Range: `/show/... | 1 to 10`\n"
-        "• Future episode tracking: new episodes auto-downloaded when you send the series link again.\n\n"
-        "⚠️ If token expires, use /renew to update."
+        "🔥 **Ultimate Pocket FM Bot**\n\n"
+        "✅ **Features:**\n"
+        "• `/login` – Login with phone & OTP (auto-saves token)\n"
+        "• Single episode: `/episode/...`\n"
+        "• Full series: `/show/...` (with range: `/show/... | 1 to 10`)\n"
+        "• Batch download: paste multiple episode links in one message\n"
+        "• Future episode tracking: new episodes auto-download on repeat request\n\n"
+        "⚠️ If you already have a token, use `/settoken <token>` to manually set it."
     )
 
-async def renew(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(
-        "🔄 **How to get a new JWT Token:**\n"
-        "1. Go to the `@PocketFMNotificationBot` on Telegram.\n"
-        "2. Use `/pbtoken` to get your fresh token.\n"
-        "3. Copy the entire `eyJ...` token.\n"
-        "4. Set it as environment variable `POCKET_TOKEN` in Render and restart the bot."
-    )
+async def set_token(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    token = update.message.text.replace('/settoken', '').strip()
+    if not token:
+        await update.message.reply_text("❌ Usage: `/settoken <your_token>`")
+        return
+    save_token(token)
+    await update.message.reply_text("✅ Token saved successfully!")
 
 async def download_and_send_episode(update, context, ep_url, ep_number=None, total_eps=None):
     try:
@@ -262,37 +327,35 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text.strip()
     msg = await update.message.reply_text("🔍 Processing...")
 
-    # If user sent onelink, resolve it (optional)
+    # Check if user sent a link that needs resolution
     if 'onelink.me' in text and 'pocketfm.com' not in text:
-        # Simple redirect follow
         try:
             resp = requests.get(text, allow_redirects=True, timeout=10)
             if 'pocketfm.com' in resp.url:
                 text = resp.url
                 await msg.edit_text(f"✅ Resolved: `{text}`")
             else:
-                await msg.edit_text("❌ Could not resolve to a Pocket FM link.")
+                await msg.edit_text("❌ Could not resolve.")
                 return
         except:
             await msg.edit_text("❌ Error resolving.")
             return
 
     try:
-        # 🟢 Multi-Link Batch Mode
+        # Multi-Link Batch
         if text.count('/episode/') > 1 or '\n' in text:
             urls = [line.strip() for line in text.split('\n') if '/episode/' in line]
             if not urls:
                 await msg.edit_text("❌ No valid episode links found.")
                 return
-            await msg.edit_text(f"🚀 Found {len(urls)} episode links. Downloading batch...")
+            await msg.edit_text(f"🚀 Found {len(urls)} links. Downloading batch...")
             for i, url in enumerate(urls, 1):
                 await download_and_send_episode(update, context, url, ep_number=i, total_eps=len(urls))
             await msg.edit_text(f"✅ Batch complete! {len(urls)} episodes sent.")
             return
 
-        # 🔵 Series Mode with Range
+        # Series with Range
         elif '/show/' in text:
-            # Check for range
             range_match = re.search(r'\|?\s*(\d+)\s*to\s*(\d+)', text)
             url = text.split('|')[0].strip()
             
@@ -300,7 +363,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             series_title, episode_urls = await asyncio.to_thread(fetch_series_data, url)
             total_found = len(episode_urls)
             
-            # Apply range if specified
             if range_match:
                 start_ep = int(range_match.group(1))
                 end_ep = int(range_match.group(2))
@@ -312,34 +374,35 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             else:
                 await msg.edit_text(f"✅ Found {total_found} episodes in '{series_title}'. Downloading...")
             
-            # Future tracking: only download new episodes
-            tracker = load_tracker()
+            # Future tracking
+            tracker_file = 'series_cache.json'
+            if os.path.exists(tracker_file):
+                with open(tracker_file, 'r') as f:
+                    tracker = json.load(f)
+            else:
+                tracker = {}
             show_id = url.split('/show/')[1].strip('/')
-            old_eps = tracker.get(show_id, [])
-            new_eps = [ep for ep in episode_urls if ep not in old_eps]
+            old = tracker.get(show_id, [])
+            new_eps = [ep for ep in episode_urls if ep not in old]
             
             if not new_eps and not range_match:
                 await msg.edit_text(f"📊 **{series_title}**\nTotal: {total_found}\n✅ All episodes already downloaded. No new episodes.")
                 return
             
-            # If range is specified, we download those even if already downloaded
             download_list = new_eps if not range_match else episode_urls
-            if range_match:
-                download_list = episode_urls  # download all in range regardless of previous
-
             for i, ep in enumerate(download_list, 1):
                 await download_and_send_episode(update, context, ep, ep_number=i, total_eps=len(download_list))
                 await asyncio.sleep(2)
             
-            # Update tracker only if not a range request
             if not range_match:
                 tracker[show_id] = episode_urls
-                save_tracker(tracker)
+                with open(tracker_file, 'w') as f:
+                    json.dump(tracker, f)
             
             await msg.edit_text(f"🎉 Complete! {len(download_list)} episodes sent.")
             return
 
-        # 🟢 Single Episode
+        # Single Episode
         elif '/episode/' in text:
             await download_and_send_episode(update, context, text)
             await msg.delete()
@@ -349,13 +412,26 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await msg.edit_text("❌ Invalid URL. Send a valid Pocket FM link.")
 
     except Exception as e:
-        await msg.edit_text(f"❌ Error: {e}\n\n💡 If token expired, use /renew to get a new one.")
+        await msg.edit_text(f"❌ Error: {e}\n\n💡 If token expired, use `/login` to refresh.")
 
 def run_bot():
     app = Application.builder().token(TOKEN).build()
+    
+    # Login Conversation
+    login_conv = ConversationHandler(
+        entry_points=[CommandHandler('login', login_start)],
+        states={
+            PHONE: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_phone)],
+            OTP: [MessageHandler(filters.TEXT & ~filters.COMMAND, verify_otp)],
+        },
+        fallbacks=[CommandHandler('cancel', cancel)]
+    )
+    
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("renew", renew))
+    app.add_handler(CommandHandler("settoken", set_token))
+    app.add_handler(login_conv)
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+    
     app.run_polling()
 
 if __name__ == '__main__':
