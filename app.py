@@ -34,7 +34,7 @@ if not TOKEN:
 flask_app = Flask(__name__)
 @flask_app.route('/')
 def index():
-    return "Multi-Platform OTT Bot Online (All-in-One)!"
+    return "Multi-Platform OTT Bot Online (Fixed Version)!"
 
 def run_flask():
     port = int(os.environ.get('PORT', 5000))
@@ -63,15 +63,20 @@ def log_download(user_id, platform):
     conn.close()
 
 # ==========================================
-# 🛡️ 3. POCKET FM SYSTEM (Proxy + curl_cffi)
+# 🛡️ 3. POCKET FM SYSTEM (Headers + Proxy)
 # ==========================================
+# 🔥 THE MOST IMPORTANT FIX: HEADERS EVERYWHERE
+HEADERS = {
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36',
+    'Referer': 'https://pocketfm.com/',
+    'Origin': 'https://pocketfm.com'
+}
+
 try:
     from curl_cffi import requests as curl_requests
     CURL_AVAILABLE = True
-    print("[Bot] curl_cffi loaded.")
 except ImportError:
     CURL_AVAILABLE = False
-    print("[Bot] curl_cffi not installed. Falling back to requests.")
 
 PROXY_LIST = []
 LAST_PROXY_FETCH = 0
@@ -90,27 +95,30 @@ def get_free_proxies():
             LAST_PROXY_FETCH = time.time()
             return PROXY_LIST
     except: pass
-    return ["103.163.118.217:8080", "45.79.66.195:3128"]
+    return ["103.163.118.217:8080"]
 
 def get_working_proxy():
     proxies = get_free_proxies()
-    for proxy in proxies:
+    for proxy in proxies[:5]: # Test only top 5 to save time
         try:
-            test_resp = requests.get("https://pocketfm.com", proxies={'http': f'http://{proxy}', 'https': f'http://{proxy}'}, timeout=5)
+            test_resp = requests.get("https://pocketfm.com", proxies={'http': f'http://{proxy}', 'https': f'http://{proxy}'}, timeout=3)
             if test_resp.status_code == 200:
                 return {'http': f'http://{proxy}', 'https': f'http://{proxy}'}
         except: continue
     return None
 
-def fetch_page(url, headers=None, timeout=30):
-    if CURL_AVAILABLE:
-        try: return curl_requests.get(url, impersonate="chrome133", headers=headers, timeout=timeout)
+def fetch_page(url, headers=None, timeout=30, stream=False):
+    req_headers = headers if headers else HEADERS
+    if CURL_AVAILABLE and not stream:
+        try: return curl_requests.get(url, impersonate="chrome133", headers=req_headers, timeout=timeout)
         except: pass
+    
     proxy = get_working_proxy()
     if proxy:
-        try: return requests.get(url, headers=headers, timeout=timeout, proxies=proxy)
+        try: return requests.get(url, headers=req_headers, timeout=timeout, proxies=proxy, stream=stream)
         except: pass
-    return requests.get(url, headers=headers, timeout=timeout)
+        
+    return requests.get(url, headers=req_headers, timeout=timeout, stream=stream)
 
 TRACKER_FILE = 'series_cache.json'
 def load_tracker():
@@ -128,10 +136,9 @@ def get_series_data(series_url):
     if not match: raise Exception("Invalid Show URL format.")
     show_id = match.group(1).split('?')[0]
     api_url = f"https://pocketfm.com/show/{show_id}"
-    headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36'}
     
-    resp = fetch_page(api_url, headers=headers, timeout=30)
-    if resp.status_code == 403: raise Exception("❌ 403 Blocked. Use Multi-Link mode (paste all episode links in one message).")
+    resp = fetch_page(api_url, timeout=30)
+    if resp.status_code == 403: raise Exception("❌ 403 Blocked. IP Ban active.")
 
     html = resp.text
     title_match = re.search(r'<meta property="og:title" content="([^"]+)"', html)
@@ -160,7 +167,12 @@ def download_chunk(args):
     try:
         full_url = seg_url if seg_url.startswith('http') else f"{base_url}/{seg_url}"
         ts_path = os.path.join(tmpdir, f"chunk_{i:04d}.ts")
-        response = requests.get(full_url, stream=True, timeout=15)
+        
+        # 🔥 FIX: Added Headers to Chunk Download
+        response = fetch_page(full_url, timeout=15, stream=True)
+        if response.status_code != 200:
+            return i, None
+            
         data = response.content
         if aes_key and iv:
             iv_bytes = bytes.fromhex(iv.replace('0x', '')) if isinstance(iv, str) else iv
@@ -173,15 +185,20 @@ def download_chunk(args):
         else:
             with open(ts_path, 'wb') as f: f.write(data)
         return i, ts_path
-    except: return i, None
+    except Exception as e: 
+        return i, None
 
 def download_audio_from_m3u8(m3u8_url):
-    playlist = m3u8.load(m3u8_url)
+    # 🔥 FIX: Manually fetching M3U8 with Headers instead of m3u8.load()
+    m3u8_content = fetch_page(m3u8_url).text
+    playlist = m3u8.loads(m3u8_content, uri=m3u8_url)
     base_url = '/'.join(m3u8_url.split('/')[:-1])
+    
     if not playlist.segments and playlist.playlists:
         m3u8_url = playlist.playlists[0].uri
         m3u8_url = m3u8_url if m3u8_url.startswith('http') else f"{base_url}/{m3u8_url}"
-        playlist = m3u8.load(m3u8_url)
+        m3u8_content = fetch_page(m3u8_url).text
+        playlist = m3u8.loads(m3u8_content, uri=m3u8_url)
         base_url = '/'.join(m3u8_url.split('/')[:-1])
 
     aes_key, iv = None, None
@@ -189,18 +206,22 @@ def download_audio_from_m3u8(m3u8_url):
         key_uri = playlist.keys[0].uri
         iv = playlist.keys[0].iv
         key_url = key_uri if key_uri.startswith('http') else f"{base_url}/{key_uri}"
-        aes_key = requests.get(key_url).content
+        # 🔥 FIX: Added Headers to Key Fetch
+        aes_key = fetch_page(key_url).content
 
     segments = [seg.uri for seg in playlist.segments]
     with tempfile.TemporaryDirectory() as tmpdir:
         tasks = [(i, seg, base_url, aes_key, iv, tmpdir) for i, seg in enumerate(segments)]
         ts_files_dict = {}
-        with ThreadPoolExecutor(max_workers=10) as executor:
+        with ThreadPoolExecutor(max_workers=5) as executor:
             futures = [executor.submit(download_chunk, arg) for arg in tasks]
             for future in as_completed(futures):
                 idx, path = future.result()
                 if path: ts_files_dict[idx] = path
+                
         ts_files = [ts_files_dict[i] for i in sorted(ts_files_dict.keys())]
+        if not ts_files:
+            raise Exception("AWS CDN Blocked chunks. Check Headers or Proxy.")
 
         if not os.path.exists('downloads'): os.makedirs('downloads')
         unique_name = str(uuid.uuid4())[:8]
@@ -212,15 +233,14 @@ def download_audio_from_m3u8(m3u8_url):
         return output_file
 
 def get_episode_metadata(episode_url):
-    headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36'}
-    resp = fetch_page(episode_url, headers=headers, timeout=20)
-    if resp.status_code == 403: raise Exception("❌ 403 Blocked. Please send a different episode link.")
+    resp = fetch_page(episode_url, timeout=20)
+    if resp.status_code == 403: raise Exception("❌ 403 Blocked by Cloudflare.")
     html = resp.text
     title = re.search(r'<meta property="og:title" content="([^"]+)"', html)
     img = re.search(r'<meta property="og:image" content="([^"]+)"', html)
     m3u8 = re.search(r'(https?://[^\s"\'<>]+\.cloudfront\.net[^\s"\'<>]*?\.m3u8[^\s"\'<>]*)', html)
     if not m3u8: m3u8 = re.search(r'(https?://[^\s"\'<>]+\.m3u8[^\s"\'<>]*)', html)
-    if not m3u8: raise Exception("M3U8 Stream not found")
+    if not m3u8: raise Exception("M3U8 Stream not found. VIP Episode?")
     ep_title = title.group(1).split("|")[0].strip() if title else "Episode"
     return m3u8.group(1), ep_title, img.group(1) if img else None
 
@@ -233,7 +253,7 @@ async def download_and_send_episode(update, context, ep_url, ep_num=None, total=
             t_id = str(uuid.uuid4())[:8]
             thumb_path = f"downloads/thumb_{t_id}.jpg"
             try:
-                img_data = requests.get(thumb_url).content
+                img_data = fetch_page(thumb_url).content
                 with open(thumb_path, 'wb') as f: f.write(img_data)
                 Image.open(thumb_path).convert('RGB').thumbnail((320, 320)).save(thumb_path, 'JPEG')
             except: pass
@@ -241,7 +261,7 @@ async def download_and_send_episode(update, context, ep_url, ep_num=None, total=
         display_title = f"[{ep_num}/{total}] {title}" if ep_num and total else title
         with open(audio_path, 'rb') as audio:
             thumb_file = open(thumb_path, 'rb') if thumb_path and os.path.exists(thumb_path) else None
-            await context.bot.send_audio(update.effective_chat.id, audio=audio, title=display_title, performer="Pocket FM", thumbnail=thumb_file)
+            await context.bot.send_audio(update.effective_chat.id, audio=audio, title=display_title, performer="Pocket FM", thumbnail=thumb_file, read_timeout=120, write_timeout=120)
             if thumb_file: thumb_file.close()
             
         log_download(update.effective_user.id, "pocketfm")
