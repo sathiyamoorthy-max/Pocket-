@@ -15,10 +15,10 @@ from PIL import Image
 
 # Flask & Telegram
 from flask import Flask
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, filters, ContextTypes
+from telegram import Update
+from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 
-# Original Libraries (No yt-dlp for PocketFM)
+# Original Libraries (For Manual Chunks)
 import requests
 import m3u8
 from Crypto.Cipher import AES
@@ -38,35 +38,44 @@ logger = logging.getLogger(__name__)
 flask_app = Flask(__name__)
 @flask_app.route('/')
 def index():
-    return "Pocket FM Classic Bot is Online!"
+    return "Pocket FM Premium Ultimate Bot is Online!"
 
 def run_flask():
     port = int(os.environ.get('PORT', 5000))
     flask_app.run(host='0.0.0.0', port=port)
 
-# Simple Session
-session = requests.Session()
-STATS = {"downloads": 0, "start_time": time.time()}
-USER_STATE = {}
+# ==========================================
+# 🔓 THE MASTER HACK: AWS WAF & COOKIE INJECTION
+# ==========================================
+# நீங்கள் கொடுத்த Netscape Cookie File-ஐ Python-க்கு ஏற்றவாறு ஒருங்கிணைத்துள்ளேன்!
+MY_SECRET_COOKIE = (
+    "web_id=bbe19cce50374861bf56ac3fbdc06588; locale=IN; first_visit=true; language=hindi; "
+    "_gcl_au=1.1.658255502.1785434862; _ga=GA1.1.1957822637.1785434862; afUserId=cd520227-a29c-4610-8b1b-95890d6b7a26-p; "
+    "_fbp=fb.1.1785434863255.104128244822616339.AQYAAQIB; AF_SYNC=1785434865274; cookieBannerDismissed=true; "
+    "isPlayerListVisible=true; muxData==undefined&mux_viewer_id=e4615458-1a85-4a56-a68d-9a92b43e58f3&msn=0.8593616164671181&sid=643a7827-5d28-471e-abdd-1243b43e5911&sst=1785435412753&sex=1785436946901; "
+    "__Secure-authjs.session-token=eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2Q0JDLUhTNTEyIiwia2lkIjoiUXJmMlVPYlhIdDNtSnVrNi14QlpsT3RjSk90SGNwc09iQkZHNlNXYnFSV0ZmamZiRFQ2elRXV2JfU19QRGtacks1Wkoyc21iLU5NWVVFajVyTUFVVncifQ..3Bm3MWTKa0HHG_uvX-GxVA.0fWCRowBPJinOCWrHaJD84vO3fDCjfSt2x4rZK6fEdhgYoSdCfvWragwrz3qPHV87LUhP5Xla6EtS5IhnZfbfI85GFUVQ_uHpqc1eSISPKfsH8Sx6vmi0a5iUlQEDHjJK3xHH85x6KGtk1VxVZTggH11f75P92bNQZr3tL4tNrcQ8oPspmW7bYoGM7jXg3F_GagEowt6Eq0iHd72_BzXSkUUcCDX7m3MhvOF-FpwawDBEuzM958Uj3xu6nQ1KZmyQNKlowwZYKybnO7u_WBwhdmRJluZ8ECrEC1NUYU3GzEMdWustmLdFoyc_gDvxP1uxRcI-sgVjyjKrqTXOpBoadYBu6OseLh8zbip7LlRn5YD8jGLamzMDwde1iXBnnfZ95HcZyWduO6xBfiT1OkQN0oys_trFviGNhk1m8AeHierawYBGu2vpomanIhfun-kMxR96lXUMqlcnm3DdgefMHaRAfjkm3kHzT7AkamHAq5kWL3VB0_858op9aV-nO4ZGJZcwkp3M88U_B8jmyXrFdposmWweyqag2KEpDtWBxkEf7rWRVgd2WK4tU2lnVog6uW7CKfHrPlwXzyvTfWegyAQ5T2iPHEIP5NVt9eZE6-TTGwOWH8D3Xl3LR99f_70a2uXp6xRn7vkO9jcHxkBHOcbXChFf8ZS1lEtv3Kxp_8kiaf2Pwsng1cxkBIq3TAPBqQHr3gLcNW0iC_m9p-im6loRaw62gJdasxy0iuOTaCuA8S0nwl4gx7_rFIVd86yd2wMg2KRDyIDReokSpZjHi6T9u67VDEhUVELHVixG1mZGtljF3pedK08RhJ56w0d3kdj6iC5O0s5sYompexjlHeZiU3MmQg9rq2IDYZ0b_1gJ5tzULhZ6fjpWRA3xtrKnqKPQ3bEX0kAa4GDvgPtst7sJC_6zao4GAVVRf5wYmTaalcu9KC1kPpHzP7tBKn2SAdQeTtkHxR_mjNurmCnSepbuFzGNUpZVw3uSnPKjSxvPAJpMWLir-7qY2AYNzg_x9n_VM32g-zdkMhHn05jU7A6F0SWZDRtp9Iu_Hn4tQgf-hbQc85Ot8AwKxafYQUWJZKds99ddgL3yCLbnrY0EQWrcYF8Gegh4CZZRlXu2hqkIcQ23l52917666ZCnaJzdh3oU3wnv1n7tg5smdCrBkPBzqlI7bu-lS12TAsR7kLxINNsygNQm5ma3MAd8Drod-sxdSrwNdzIEG9EXdd_eLdEV9od105oiI0eY1kqf3CRZyLPylhkRfT8vspm4BJLT5AxShClz_pV3DU4XHWYY6Z7QnxIwTYMgcAwHJ0ayIIOo5h0lhExPK_DAnzPbjTjeLc1ifdTt5sm1TkM8H5a3rbArZNn1meNeBx3eqQ_0vE0zl8jvF3ZWHDrhF_2nvO-JF4rg7yxd9RbLZD2tRAAAiyp9GAnbrDftojiaqHT1UHy3tInKCVc0DHMuC5CAfgE7QdiO8AggkUBmiSp4JE11IEDz_9Ez3KFJ6Hf1LgKlJ2VkQvBu2lgk6oPj0UPIi2vzkuU-UrMijxwFQCWzbmjUHudaULpR3LGj30ZNBMsrE882WgTbNhQgk9bEoQKMnfW0Ul82PNvg7FCUT9lo283fvztgaMfOE6n_yy30PvCn6-LiAs-Oylt5iJFeYCctS-D7foFqlzHK2RRsy5A24UsmA.xLMzZPszAwfkc-wLc21ntyu1rgZbqum11q_xoEIZeZ4; "
+    "auth-token=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJjYXRlZ29yeSI6ImFjY2VzcyIsImRldmljZV9pZCI6Im1vYmlsZS13ZWIiLCJleHBpcnkiOjE3ODU2NDk3MzAsImlhdCI6MTc4NTQ3NjkzMCwibG9jYWxlIjoiIiwicGxhdGZvcm0iOiJ3ZWIiLCJyb2xlIjoiTGlzdGVuZXIiLCJ0ZW5hbnQiOiJwb2NrZXRfZm0iLCJ1aWQiOiIiLCJ2ZXJzaW9uIjoidjIifQ.VC0TGwd7kNyYR993gOfnjp4psKtiRuS3EjZgKu_szMo; "
+    "_dd_s_v2=aid=08bea9dd-fd1c-4b7a-bbbb-77b9861960ca&id=4cc76409-77a0-4a93-a031-4251cb08c8a4&created=1785641061129&expire=1785641971090&c=0; "
+    "AWSALB=XpbIH19DXxDHyY+oDYQCfuBkHUxA4Q8rn1H0fyF0pqwFAOg1rhEMZ+XXAD+2NRfML+31j2P0ShR0SIm8X/vFSsCtHKxHbYh062n5D8LVxG2ueJzMUhl/gL3oMA2F; "
+    "AWSALBCORS=XpbIH19DXxDHyY+oDYQCfuBkHUxA4Q8rn1H0fyF0pqwFAOg1rhEMZ+XXAD+2NRfML+31j2P0ShR0SIm8X/vFSsCtHKxHbYh062n5D8LVxG2ueJzMUhl/gL3oMA2F; "
+    "_ga_8SC2XL7K1M=GS2.1.s1785641064$o6$g1$t1785641104$j20$l0$h2096322289"
+)
 
-# Original Simple Headers
-HEADERS = {
-    '# 🌐 THE MASTER HACK: YOUR BROWSER IDENTITY
-MY_SECRET_COOKIE = "இங்கே_உங்கள்_பிரவுசரில்_காப்பி_செய்த_முழு_COOKIE_ஐ_பேஸ்ட்_செய்யவும்"
-MY_USER_AGENT = "இங்கே_உங்கள்_பிரவுசரில்_காப்பி_செய்த_USER_AGENT_ஐ_பேஸ்ட்_செய்யவும்"
+MY_USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 
 HEADERS = {
     'User-Agent': MY_USER_AGENT,
     'Accept': '*/*',
-    'Accept-Language': 'en-US,en;q=0.9',
     'Referer': 'https://pocketfm.com/',
     'Origin': 'https://pocketfm.com',
-    'Cookie': MY_SECRET_COOKIE  # 🔥 Cloudflare-ஐ ஏமாற்றும் மாஸ்டர் சாவி
-}'
+    'Cookie': MY_SECRET_COOKIE  # 🔥 AWS WAF & Cloudfront-ஐ உடைக்கும் சாவி!
 }
 
+session = requests.Session()
+USER_STATE = {}
+
 # ==========================================
-# 🔥 POCKET FM SERIES FETCHER (CLASSIC)
+# 🔥 POCKET FM SERIES FETCHER
 # ==========================================
 def get_series_data(series_url):
     match = re.search(r'/show/([a-zA-Z0-9_-]+)', series_url)
@@ -76,7 +85,7 @@ def get_series_data(series_url):
     
     resp = session.get(api_url, headers=HEADERS, timeout=30)
     if resp.status_code != 200:
-        raise Exception(f"Failed to fetch show page. Status code: {resp.status_code}")
+        raise Exception(f"CDN Blocked Series Fetch. Status: {resp.status_code}")
 
     html = resp.text
     title_match = re.search(r'<meta property="og:title" content="([^"]+)"', html)
@@ -114,7 +123,7 @@ def get_series_data(series_url):
     return series_title, series_thumb, ep_list
 
 # ==========================================
-# 🎵 ORIGINAL AUDIO DOWNLOADER (MANUAL CHUNKS)
+# 🎵 ORIGINAL AUDIO DOWNLOADER
 # ==========================================
 def download_chunk(args):
     i, seg_url, base_url, aes_key, iv, tmpdir = args
@@ -125,7 +134,8 @@ def download_chunk(args):
         response = session.get(full_url, headers=HEADERS, timeout=20, stream=True)
         data = response.content
         
-        if b'<html' in data[:100].lower():
+        if b'<html' in data[:100].lower() or b'accessdenied' in data[:100].lower():
+            logger.error(f"Chunk {i} blocked by AWS CDN.")
             return i, None
             
         if aes_key and iv:
@@ -173,7 +183,7 @@ def download_audio_from_m3u8(m3u8_url):
                 if path: ts_files_dict[idx] = path
                 
         ts_files = [ts_files_dict[i] for i in sorted(ts_files_dict.keys())]
-        if not ts_files: raise Exception("Cloudflare Blocked the audio chunks.")
+        if not ts_files: raise Exception("AWS Firewall Blocked the audio chunks. Please provide a fresh cookie.")
         
         if not os.path.exists('downloads'): os.makedirs('downloads')
         output_file = f"downloads/audio_{uuid.uuid4().hex[:8]}.mp3"
@@ -187,7 +197,7 @@ def download_audio_from_m3u8(m3u8_url):
 def get_episode_metadata(episode_url):
     resp = session.get(episode_url, headers=HEADERS, timeout=20)
     if resp.status_code != 200:
-        raise Exception("Failed to fetch episode. HTTP Error.")
+        raise Exception("Failed to fetch episode. Check your Cookie.")
         
     html = resp.text
     title = re.search(r'<meta property="og:title" content="([^"]+)"', html)
@@ -229,7 +239,6 @@ async def download_and_send_episode(update, context, ep_url, ep_number=None, tot
             )
             if thumb_file: thumb_file.close()
 
-        STATS["downloads"] += 1
         if os.path.exists(audio_path): os.remove(audio_path)
         if thumb_path and os.path.exists(thumb_path): os.remove(thumb_path)
         return True, title
@@ -246,6 +255,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text.strip()
     user_id = update.effective_user.id
     
+    # 🌟 TRACK SELECTION LOGIC
     if user_id in USER_STATE and USER_STATE[user_id].get('state') == 'WAITING_FOR_TRACK':
         state_data = USER_STATE[user_id]
         eps = state_data['eps']
@@ -285,6 +295,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             del USER_STATE[user_id]
             return
 
+    # 🌟 SERIES LINK PROCESSING
     if 'pocketfm.com/show/' in text:
         url = text.split('|')[0].strip()
         msg = await update.message.reply_text("🔄 Fetching Series info...")
@@ -318,6 +329,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await msg.edit_text(f"❌ Error fetching series: {e}")
             return
             
+    # 🌟 SINGLE EPISODE PROCESSING
     elif 'pocketfm.com/episode/' in text:
         msg = await update.message.reply_text("⬇️ Downloading single episode...")
         success, result = await download_and_send_episode(update, context, text)
