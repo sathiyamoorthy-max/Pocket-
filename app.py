@@ -8,15 +8,14 @@ import tempfile
 import json
 import threading
 import time
-import math
 import requests
 from dotenv import load_dotenv
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from PIL import Image
 
 from flask import Flask
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, filters, ContextTypes, ConversationHandler
+from telegram import Update
+from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes, ConversationHandler
 
 import m3u8
 from Crypto.Cipher import AES
@@ -26,19 +25,18 @@ import yt_dlp
 load_dotenv()
 
 # ==========================================
-# 🔥 CONFIGURATION (கட்டமைப்பு)
+# 🔥 CONFIGURATION
 # ==========================================
 TOKEN = os.getenv("TELEGRAM_TOKEN")
 if not TOKEN:
     raise ValueError("TELEGRAM_TOKEN environment variable missing.")
 
-# Pocket FM API Endpoints (உங்கள் HTTP Injector லாக்-களில் இருந்து இவற்றை மாற்றவும்)
-BASE_API = "https://api.pocketfm.com/api/v1"
-LOGIN_URL = f"{BASE_API}/auth/otp/request"    # OTP கேட்கும் URL
-VERIFY_URL = f"{BASE_API}/auth/otp/verify"    # OTP சரிபார்க்கும் URL
-DEVICE_ID = os.getenv("DEVICE_ID", "OPPO_CPH2219")
+# 🔥 புதிய சரியான API எண்ட்பாயிண்ட்கள் (உங்கள் ஸ்கிரீன்ஷாட்டில் இருந்து எடுக்கப்பட்டது)
+BASE_API = "https://pocketfm.com/api/v1"
+LOGIN_URL = "https://pocketfm.com/api/auth/otp/request"
+VERIFY_URL = "https://pocketfm.com/api/auth/callback/credentials?"  # 👈 இந்த URL தான் ரொம்ப முக்கியம்!
 
-# Token-ஐ சேமிக்கும் ஃபைல்
+DEVICE_ID = os.getenv("DEVICE_ID", "OPPO_CPH2219")
 TOKEN_FILE = "pocket_token.json"
 DEFAULT_HEADERS = {
     "X-Device-Id": DEVICE_ID,
@@ -59,19 +57,23 @@ def run_flask():
     flask_app.run(host='0.0.0.0', port=port)
 
 # ==========================================
-# 🔐 TOKEN MANAGEMENT (Login & Storage)
+# 🔐 TOKEN MANAGEMENT
 # ==========================================
 def save_token(token):
     with open(TOKEN_FILE, 'w') as f:
         json.dump({"token": token, "timestamp": time.time()}, f)
+    logger.info("Token saved successfully.")
 
 def load_token():
     if os.path.exists(TOKEN_FILE):
         try:
             with open(TOKEN_FILE, 'r') as f:
                 data = json.load(f)
-                if time.time() - data['timestamp'] < 86400:  # 24 மணி நேரம்
+                if time.time() - data['timestamp'] < 86400:  # 24 மணிநேரம் வரை வேலை செய்யும்
                     return data['token']
+                else:
+                    logger.warning("Token expired. Deleting.")
+                    os.remove(TOKEN_FILE)
         except:
             pass
     return None
@@ -92,7 +94,7 @@ PHONE, OTP = range(2)
 async def login_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "📞 **Login to Pocket FM**\n\n"
-        "Please send your mobile number with country code (e.g., `+919087821263`).\n"
+        "Send your mobile number with country code (e.g., `+919087821263`).\n"
         "We will send you an OTP."
     )
     return PHONE
@@ -105,16 +107,21 @@ async def get_phone(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     context.user_data['phone'] = phone
     try:
-        # 🔥 OTP Request API
         resp = requests.post(LOGIN_URL, json={"phone": phone}, headers=DEFAULT_HEADERS, timeout=15)
         if resp.status_code == 200:
             await update.message.reply_text(f"✅ OTP sent to {phone}\n\nPlease enter the 6-digit OTP.")
             return OTP
         else:
-            await update.message.reply_text(f"❌ API Error: {resp.status_code} - {resp.text}")
+            await update.message.reply_text(
+                f"❌ OTP API Error: {resp.status_code}.\n\n"
+                f"💡 **Quick Fix (Skip OTP):** Use `/settoken` command.\n"
+                f"1. Open Kiwi Browser -> Login to `web.pocketfm.com`.\n"
+                f"2. Go to Dev Tools -> Network -> Find `Authorization` Header.\n"
+                f"3. Send `/settoken Bearer eyJ...` to me."
+            )
             return ConversationHandler.END
     except Exception as e:
-        await update.message.reply_text(f"❌ Error: {e}")
+        await update.message.reply_text(f"❌ Connection Error: {e}")
         return ConversationHandler.END
 
 async def verify_otp(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -125,21 +132,23 @@ async def verify_otp(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     phone = context.user_data.get('phone')
     try:
-        # 🔥 OTP Verify API
+        # 🔥 இங்கேதான் புதிய சரியான URL பயன்படுத்தப்படுகிறது!
         payload = {"phone": phone, "otp": otp}
         resp = requests.post(VERIFY_URL, json=payload, headers=DEFAULT_HEADERS, timeout=15)
+        
         if resp.status_code == 200:
             data = resp.json()
-            token = data.get('data', {}).get('token')
+            # API ரெஸ்பான்ஸில் Token-ஐ எடுக்கும் இடம் (இது மாறக்கூடும்)
+            token = data.get('data', {}).get('token') or data.get('token')
             if token:
                 save_token(token)
-                await update.message.reply_text("🎉 **Login Successful!** Token saved. You can now download episodes without 403 errors.")
+                await update.message.reply_text("🎉 **Login Successful!** Token saved. No more 403 errors!")
                 return ConversationHandler.END
             else:
-                await update.message.reply_text("❌ Token not found in response. Please check API.")
+                await update.message.reply_text("❌ Token not found in API response. Try `/settoken` manually.")
                 return ConversationHandler.END
         else:
-            await update.message.reply_text(f"❌ Verification failed: {resp.status_code} - {resp.text}")
+            await update.message.reply_text(f"❌ Verification failed: {resp.status_code}. Try `/settoken` manually.")
             return ConversationHandler.END
     except Exception as e:
         await update.message.reply_text(f"❌ Error: {e}")
@@ -150,20 +159,33 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return ConversationHandler.END
 
 # ==========================================
-# 📦 SERIES & EPISODE API FUNCTIONS
+# 📦 API FUNCTIONS (Series & Episode)
 # ==========================================
+def api_request(url, method="GET", data=None):
+    headers = get_headers()
+    try:
+        if method == "GET":
+            resp = requests.get(url, headers=headers, timeout=30)
+        else:
+            resp = requests.post(url, headers=headers, json=data, timeout=30)
+            
+        if resp.status_code == 401:
+            # Token expired
+            if os.path.exists(TOKEN_FILE): os.remove(TOKEN_FILE)
+            raise Exception("TOKEN_EXPIRED")
+        return resp
+    except requests.exceptions.RequestException as e:
+        raise Exception(f"Network Error: {e}")
+
 def fetch_series_data(series_url):
     match = re.search(r'/show/([a-zA-Z0-9_-]+)', series_url)
-    if not match:
-        raise Exception("Invalid series URL format.")
+    if not match: raise Exception("Invalid series URL format.")
     show_id = match.group(1).split('?')[0]
     
-    headers = get_headers()
-    resp = requests.get(f"{BASE_API}/show/{show_id}", headers=headers, timeout=30)
-    if resp.status_code == 401:
-        raise Exception("Token expired. Use /login to refresh.")
-    if resp.status_code != 200:
-        raise Exception(f"API error: {resp.status_code}")
+    url = f"{BASE_API}/show/{show_id}"
+    resp = api_request(url)
+    
+    if resp.status_code != 200: raise Exception(f"API Error: {resp.status_code}")
     
     data = resp.json()
     series_title = data.get('title', 'Unknown Series')
@@ -173,27 +195,27 @@ def fetch_series_data(series_url):
 
 def fetch_episode_stream(episode_url):
     match = re.search(r'/episode/([a-zA-Z0-9_-]+)', episode_url)
-    if not match:
-        raise Exception("Invalid episode URL.")
+    if not match: raise Exception("Invalid episode URL.")
     episode_id = match.group(1).split('?')[0]
     
-    headers = get_headers()
-    resp = requests.get(f"{BASE_API}/episode/{episode_id}", headers=headers, timeout=20)
-    if resp.status_code == 401:
-        raise Exception("Token expired.")
-    if resp.status_code != 200:
-        raise Exception(f"API error: {resp.status_code}")
+    url = f"{BASE_API}/episode/{episode_id}"
+    resp = api_request(url)
+    
+    if resp.status_code != 200: raise Exception(f"API Error: {resp.status_code}")
     
     data = resp.json()
     title = data.get('title', 'Episode')
     thumbnail = data.get('imageUrl') or data.get('thumbnail')
+    
+    # ஸ்ட்ரீம் URL-ஐ தேடுதல் (அவுட் புட் வித்தியாசமாக இருக்கலாம்)
     stream_url = data.get('audioUrl') or data.get('streamUrl')
     if not stream_url:
         playback = data.get('playbackInfo')
         if playback:
             stream_url = playback.get('url')
     if not stream_url:
-        raise Exception("No audio stream URL found.")
+        raise Exception("No audio stream URL found in API response.")
+        
     return stream_url, title, thumbnail
 
 # ==========================================
@@ -211,15 +233,11 @@ def download_chunk(args):
             iv_bytes = iv_bytes.ljust(16, b'\0')
             cipher = AES.new(aes_key, AES.MODE_CBC, iv_bytes)
             decrypted_data = cipher.decrypt(data)
-            try:
-                decrypted_data = unpad(decrypted_data, AES.block_size)
-            except:
-                pass
-            with open(ts_path, 'wb') as f:
-                f.write(decrypted_data)
+            try: decrypted_data = unpad(decrypted_data, AES.block_size)
+            except: pass
+            with open(ts_path, 'wb') as f: f.write(decrypted_data)
         else:
-            with open(ts_path, 'wb') as f:
-                f.write(data)
+            with open(ts_path, 'wb') as f: f.write(data)
         return i, ts_path
     except:
         return i, None
@@ -248,12 +266,10 @@ def download_audio_from_m3u8(m3u8_url):
             futures = [executor.submit(download_chunk, arg) for arg in tasks]
             for future in as_completed(futures):
                 idx, path = future.result()
-                if path:
-                    ts_files_dict[idx] = path
+                if path: ts_files_dict[idx] = path
         ts_files = [ts_files_dict[i] for i in sorted(ts_files_dict.keys())]
         
-        if not os.path.exists('downloads'):
-            os.makedirs('downloads')
+        if not os.path.exists('downloads'): os.makedirs('downloads')
         unique_name = str(uuid.uuid4())[:8]
         output_file = f"downloads/audio_{unique_name}.mp3"
         list_path = os.path.join(tmpdir, "list.txt")
@@ -268,14 +284,14 @@ def download_audio_from_m3u8(m3u8_url):
 # ==========================================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "🔥 **Ultimate Pocket FM Bot**\n\n"
+        "🔥 **Ultimate Pocket FM Bot (Re-written)**\n\n"
         "✅ **Features:**\n"
-        "• `/login` – Login with phone & OTP (auto-saves token)\n"
+        "• `/login` – Auto Login with phone & OTP\n"
+        "• `/settoken <token>` – Manually set JWT Token (Skip OTP)\n"
         "• Single episode: `/episode/...`\n"
         "• Full series: `/show/...` (with range: `/show/... | 1 to 10`)\n"
-        "• Batch download: paste multiple episode links in one message\n"
-        "• Future episode tracking: new episodes auto-download on repeat request\n\n"
-        "⚠️ If you already have a token, use `/settoken <token>` to manually set it."
+        "• Batch download: paste multiple episode links in one message\n\n"
+        "⚠️ **If you get 403/404:** Use `/settoken Bearer eyJ...` obtained from DevTools."
     )
 
 async def set_token(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -284,7 +300,7 @@ async def set_token(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❌ Usage: `/settoken <your_token>`")
         return
     save_token(token)
-    await update.message.reply_text("✅ Token saved successfully!")
+    await update.message.reply_text("✅ Token saved successfully! No 403 errors anymore.")
 
 async def download_and_send_episode(update, context, ep_url, ep_number=None, total_eps=None):
     try:
@@ -297,11 +313,9 @@ async def download_and_send_episode(update, context, ep_url, ep_number=None, tot
             thumb_path = f"downloads/thumb_{t_id}.jpg"
             try:
                 img_data = requests.get(thumb_url).content
-                with open(thumb_path, 'wb') as f:
-                    f.write(img_data)
+                with open(thumb_path, 'wb') as f: f.write(img_data)
                 Image.open(thumb_path).convert('RGB').thumbnail((320, 320)).save(thumb_path, 'JPEG')
-            except:
-                thumb_path = None
+            except: pass
         
         display_title = f"[{ep_number}/{total_eps}] {title}" if ep_number and total_eps else title
         with open(audio_path, 'rb') as audio:
@@ -313,21 +327,19 @@ async def download_and_send_episode(update, context, ep_url, ep_number=None, tot
                 performer="Pocket FM",
                 thumbnail=thumb_file
             )
-            if thumb_file:
-                thumb_file.close()
-        if os.path.exists(audio_path):
-            os.remove(audio_path)
-        if thumb_path and os.path.exists(thumb_path):
-            os.remove(thumb_path)
+            if thumb_file: thumb_file.close()
+        if os.path.exists(audio_path): os.remove(audio_path)
+        if thumb_path and os.path.exists(thumb_path): os.remove(thumb_path)
         return True, title
     except Exception as e:
+        if str(e) == "TOKEN_EXPIRED":
+            return False, "Token expired! Please use `/settoken` to update it."
         return False, str(e)
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text.strip()
     msg = await update.message.reply_text("🔍 Processing...")
 
-    # Check if user sent a link that needs resolution
     if 'onelink.me' in text and 'pocketfm.com' not in text:
         try:
             resp = requests.get(text, allow_redirects=True, timeout=10)
@@ -376,11 +388,10 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             
             # Future tracking
             tracker_file = 'series_cache.json'
+            tracker = {}
             if os.path.exists(tracker_file):
                 with open(tracker_file, 'r') as f:
                     tracker = json.load(f)
-            else:
-                tracker = {}
             show_id = url.split('/show/')[1].strip('/')
             old = tracker.get(show_id, [])
             new_eps = [ep for ep in episode_urls if ep not in old]
@@ -412,12 +423,11 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await msg.edit_text("❌ Invalid URL. Send a valid Pocket FM link.")
 
     except Exception as e:
-        await msg.edit_text(f"❌ Error: {e}\n\n💡 If token expired, use `/login` to refresh.")
+        await msg.edit_text(f"❌ Error: {e}\n\n💡 Token expired? Use `/settoken` command.")
 
 def run_bot():
     app = Application.builder().token(TOKEN).build()
     
-    # Login Conversation
     login_conv = ConversationHandler(
         entry_points=[CommandHandler('login', login_start)],
         states={
