@@ -4,12 +4,15 @@ import uuid
 import threading
 import subprocess
 import requests
-import m3u8
 from bs4 import BeautifulSoup
 from http.cookiejar import MozillaCookieJar
 from flask import Flask
 import telebot
 from telebot.types import ReplyKeyboardMarkup, KeyboardButton
+
+# FFmpeg Auto Setup
+import static_ffmpeg
+static_ffmpeg.add_paths()
 
 # ==========================================
 # 1. Environment Variables Setup
@@ -41,9 +44,8 @@ threading.Thread(target=run_web_server, daemon=True).start()
 # ==========================================
 session = requests.Session()
 session.headers.update({
-    "User-Agent": "PocketFM/6.5.0 (Android; 13; SM-G991B)",
-    "Accept": "application/json, text/plain, */*",
-    "Accept-Language": "en-US,en;q=0.9"
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36",
+    "Accept": "application/json, text/plain, */*"
 })
 
 COOKIE_FILE = 'cookies.txt'
@@ -70,19 +72,17 @@ def send_welcome(message):
     bot.send_message(
         message.chat.id,
         "👑 **Welcome to World Best Pocket FM Downloader Bot!**\n\n"
-        "✨ **Features Included:**\n"
-        "🟢 Multi-API & Scraper Bypass (404 Error Fix)\n"
-        "🖼️ HD Cover Art / Thumbnail Support\n"
-        "🎶 Track Title & Artist Metadata Tagging\n"
-        "🎧 Single, Multi-Link & Full Series Range Download\n"
-        "⚡ Powered by FFmpeg, m3u8 & yt-dlp Backend\n\n"
-        "👇 *Choose an option below or send any Pocket FM link:*",
+        "✨ **Features Enabled:**\n"
+        "🟢 Auto FFmpeg Engine (Static Setup)\n"
+        "🖼️ HD Cover Art + Title Metadata Tagging\n"
+        "🎧 Range Download, Multi-Link & Full Series Support\n\n"
+        "👇 *Choose an option below:*",
         reply_markup=get_main_menu(),
         parse_mode="Markdown"
     )
 
 # ==========================================
-# 5. Core Multi-API & Metadata Engine
+# 5. Core Multi-API Engine
 # ==========================================
 def fetch_episode_metadata(episode_id_or_url):
     ep_id = episode_id_or_url.split('/')[-1].split('?')[0]
@@ -90,7 +90,6 @@ def fetch_episode_metadata(episode_id_or_url):
     endpoints = [
         f"https://api.pocketfm.com/v2/episodes/{ep_id}",
         f"https://api.pocketfm.com/v3/episodes/{ep_id}",
-        f"https://api.pocketfm.com/api/v1/episode/{ep_id}",
         f"https://api.pocketfm.com/v4/episodes/{ep_id}"
     ]
     
@@ -123,30 +122,7 @@ def fetch_episode_metadata(episode_id_or_url):
         except Exception:
             continue
             
-    # Web Scraper Fallback
-    try:
-        web_url = f"https://www.pocketfm.com/episode/{ep_id}" if not episode_id_or_url.startswith("http") else episode_id_or_url
-        web_resp = session.get(web_url, timeout=15)
-        if web_resp.status_code == 200:
-            soup = BeautifulSoup(web_resp.text, 'html.parser')
-            title = soup.find('meta', property='og:title')
-            image = soup.find('meta', property='og:image')
-            
-            script_tags = soup.find_all('script')
-            for script in script_tags:
-                if script.string and ('m3u8' in script.string or 'mp3' in script.string):
-                    match = re.search(r'https?://[^\s"]+\.(?:m3u8|mp3)[^\s"]*', script.string)
-                    if match:
-                        return {
-                            'stream_url': match.group(0),
-                            'ep_title': title['content'] if title else f"Episode {ep_id}",
-                            'show_title': "Pocket FM",
-                            'thumb_url': image['content'] if image else None
-                        }, None
-    except Exception as e:
-        print(f"Scraper error: {e}")
-
-    return None, "404 Error: Audio Stream எடுக்க முடியவில்லை. புது cookies.txt தேவைப்படலாம்."
+    return None, "Audio stream எடுக்க முடியவில்லை. `cookies.txt` புதுப்பிக்கவும்."
 
 def download_audio_and_thumb(ep_data):
     try:
@@ -157,7 +133,7 @@ def download_audio_and_thumb(ep_data):
         audio_file = f"downloads/{unique_id}.mp3"
         thumb_file = f"downloads/{unique_id}.jpg" if ep_data.get('thumb_url') else None
         
-        # Download Cover Image
+        # Download Thumbnail
         if ep_data.get('thumb_url'):
             try:
                 img_bytes = session.get(ep_data['thumb_url'], timeout=10).content
@@ -166,16 +142,24 @@ def download_audio_and_thumb(ep_data):
             except Exception:
                 thumb_file = None
                 
-        # FFmpeg Audio Converter
-        cmd = ['ffmpeg', '-y', '-i', ep_data['stream_url'], '-c', 'copy', '-bsf:a', 'aac_adtstoasc', audio_file]
-        subprocess.run(cmd, check=True, capture_output=True)
+        user_agent_header = "User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36\r\n"
         
+        cmd = [
+            'ffmpeg', '-y',
+            '-headers', user_agent_header,
+            '-i', ep_data['stream_url'],
+            '-c', 'copy',
+            '-bsf:a', 'aac_adtstoasc',
+            audio_file
+        ]
+        
+        subprocess.run(cmd, check=True, capture_output=True)
         return audio_file, thumb_file, None
     except Exception as e:
         return None, None, f"FFmpeg Error: {str(e)}"
 
 # ==========================================
-# 6. Episode & Multi-Link Handler
+# 6. Single & Multi-Link Handler
 # ==========================================
 @bot.message_handler(regexp=r"pocketfm\.com/episode/")
 def handle_single_or_multi_episodes(message):
@@ -183,7 +167,7 @@ def handle_single_or_multi_episodes(message):
     text = message.text.strip()
     links = [line.strip() for line in text.splitlines() if "pocketfm.com/episode/" in line]
     
-    status_msg = bot.send_message(chat_id, f"⏳ {len(links)} எபிசோடு லிங்க்(கள்) கண்டறியப்பட்டது...")
+    status_msg = bot.send_message(chat_id, f"⏳ {len(links)} எபிசோடு லிங்க்(கள்) டவுன்லோட் ஆகிறது...")
     
     for idx, link in enumerate(links, start=1):
         try:
@@ -196,7 +180,7 @@ def handle_single_or_multi_episodes(message):
                 
             audio_file, thumb_file, err = download_audio_and_thumb(ep_data)
             if err:
-                bot.send_message(chat_id, f"⚠️ Link {idx} Download Error: {err}")
+                bot.send_message(chat_id, f"⚠️ Link {idx} Error: {err}")
                 continue
                 
             with open(audio_file, 'rb') as audio:
@@ -235,8 +219,7 @@ def handle_show_link(message):
         
         endpoints = [
             f"https://api.pocketfm.com/v3/shows/{show_id}",
-            f"https://api.pocketfm.com/v4/shows/{show_id}",
-            f"https://api.pocketfm.com/api/v1/show/{show_id}"
+            f"https://api.pocketfm.com/v4/shows/{show_id}"
         ]
         
         data = None
@@ -270,7 +253,7 @@ def process_episode_range(message):
     text = message.text.strip()
     
     if chat_id not in user_states:
-        bot.send_message(chat_id, "❌ Session முடிந்தது. மீண்டும் Link-ஐ அனுப்பவும்.")
+        bot.send_message(chat_id, "❌ Session முடிந்தது.")
         return
         
     data = user_states[chat_id]
@@ -345,10 +328,10 @@ def handle_refresh_button(message):
 
 @bot.message_handler(func=lambda message: message.text == "📊 About & Status")
 def handle_about_button(message):
-    bot.send_message(message.chat.id, "👑 **World Best Pocket FM Downloader Bot**\n\n✅ Multi-API Engine\n✅ Full Scraper & m3u8 Fallback\n✅ HD Thumbnail & Track Title\n✅ 24/7 Alive Web Server.")
+    bot.send_message(message.chat.id, "👑 **World Best Pocket FM Downloader Bot**\n\n✅ FFmpeg Static Engine\n✅ Cover Art & Track Title\n✅ 24/7 Web Server Enabled.")
 
 # ==========================================
 # 10. Start Polling
 # ==========================================
-print("👑 Ultimate World Best Bot Started...")
+print("👑 Ultimate Bot Started...")
 bot.polling(none_stop=True, skip_pending=True)
