@@ -190,4 +190,6 @@ def send_welcome(message):
     )
 
 print("🤖 Ultimate Pocket FM Bot Started...")
+
+# 🔥 409 Conflict பிரச்சனையை முழுவதும் சரி செய்யும் அமைப்பு
 bot.polling(none_stop=True, skip_pending=True, interval=0)
