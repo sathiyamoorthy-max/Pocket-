@@ -1,7 +1,6 @@
 import os
 import telebot
 import requests
-import re
 import subprocess
 import uuid
 import threading
@@ -14,13 +13,13 @@ BOT_TOKEN = os.environ.get("TELEGRAM_TOKEN")
 POCKET_TOKEN = os.environ.get("POCKET_TOKEN")
 
 # ==========================================
-# 2. Render Dummy Web Server
+# 2. Render Dummy Web Server (24/7 Support)
 # ==========================================
 app = Flask(__name__)
 
 @app.route('/')
 def home():
-    return "Universe Coder Pocket FM Bot is ALIVE! 🚀"
+    return "Pocket FM Bot is ALIVE! 🚀"
 
 def run_web_server():
     port = int(os.environ.get('PORT', 8080))
@@ -43,56 +42,23 @@ bot = telebot.TeleBot(BOT_TOKEN)
 user_states = {}
 
 # ==========================================
-# 4. 🔥 AUTO NUMERIC ID CONVERTER (The Magic Fix)
-# ==========================================
-def get_numeric_id(url, is_episode=False):
-    try:
-        # சாதாரண பிரவுசர் போல சென்று வெப்சைட்டிலிருந்து ID-ஐ திருடுகிறோம் 
-        web_headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36"}
-        html = requests.get(url, headers=web_headers, timeout=15).text
-        
-        if is_episode:
-            match = re.search(r'"episode_?id"\s*:\s*"?(\d+)"?', html, re.IGNORECASE)
-        else:
-            match = re.search(r'"show_?id"\s*:\s*"?(\d+)"?', html, re.IGNORECASE)
-            
-        if match:
-            return match.group(1)
-        return None
-    except Exception as e:
-        print(f"Scraping Error: {e}")
-        return None
-
-# ==========================================
-# 5. UNIVERSE LINK HANDLER
+# 4. 🔥 THE "OLD IS GOLD" LINK HANDLER
 # ==========================================
 @bot.message_handler(func=lambda message: "pocketfm.com" in message.text)
 def handle_universal_link(message):
     chat_id = message.chat.id
     url = message.text.strip()
     
-    status_msg = bot.reply_to(message, "🔍 யுனிவர்சல் கோடர்: லிங்கைச் சரிபார்க்கிறேன்...")
+    status_msg = bot.reply_to(message, "🔍 லிங்கைச் சரிபார்க்கிறேன்...")
     
     try:
+        # பழைய முறைப்படி லிங்கில் உள்ள ID-ஐ நேரடியாக எடுக்கிறோம்
         clean_url = url.split('?')[0].strip('/')
         extracted_id = clean_url.split('/')[-1]
-        is_episode = "/episode/" in clean_url
-        
-        # 🟢 ID எழுத்துக்களாக இருந்தால் (Hash), அதை எண்களாக மாற்றுகிறோம்
-        if not extracted_id.isdigit():
-            bot.edit_message_text("⚙️ Web Link கண்டறியப்பட்டது! Numeric ID-ஐ எடுக்கிறேன்...", chat_id, status_msg.message_id)
-            numeric_id = get_numeric_id(url, is_episode)
-            
-            if not numeric_id:
-                bot.edit_message_text("❌ பிழை: இந்த லிங்கிலிருந்து Numeric ID-ஐ எடுக்க முடியவில்லை.", chat_id, status_msg.message_id)
-                return
-            extracted_id = numeric_id
-            
-        # இப்போது extracted_id கண்டிப்பாக ஒரு எண்ணாக (Numeric) இருக்கும்!
         
         # 🟢 DIRECT EPISODE LINK
-        if is_episode:
-            bot.edit_message_text(f"⏳ எபிசோடு ID [{extracted_id}] டவுன்லோட் ஆகிறது...", chat_id, status_msg.message_id)
+        if "/episode/" in clean_url:
+            bot.edit_message_text(f"⏳ எபிசோடு டவுன்லோட் ஆகிறது...", chat_id, status_msg.message_id)
             audio_file, error = download_episode_audio(extracted_id)
             
             if error:
@@ -102,7 +68,7 @@ def handle_universal_link(message):
             bot.edit_message_text("⬆️ அப்லோட் ஆகிறது...", chat_id, status_msg.message_id)
             try:
                 with open(audio_file, 'rb') as f:
-                    bot.send_audio(chat_id, f, title=f"Episode - {extracted_id}", performer="Pocket FM")
+                    bot.send_audio(chat_id, f, title=f"Episode - Pocket FM", performer="Pocket FM")
             finally:
                 if audio_file and os.path.exists(audio_file):
                     os.remove(audio_file)
@@ -114,10 +80,10 @@ def handle_universal_link(message):
             resp = requests.get(api_url, headers=HEADERS, timeout=30)
             
             if resp.status_code in [401, 403]:
-                bot.edit_message_text("❌ Token Error: புதிய Bearer Token-ஐ Render-ல் மாற்றவும்.", chat_id, status_msg.message_id)
+                bot.edit_message_text("❌ Token Error: புதிய Bearer Token-ஐ அப்டேட் செய்யவும்.", chat_id, status_msg.message_id)
                 return
             if resp.status_code != 200:
-                bot.edit_message_text(f"❌ API Error: {resp.status_code}", chat_id, status_msg.message_id)
+                bot.edit_message_text(f"❌ API Error: {resp.status_code}. லிங்க் தவறாக இருக்கலாம்.", chat_id, status_msg.message_id)
                 return
                 
             data = resp.json()
@@ -137,10 +103,10 @@ def handle_universal_link(message):
             bot.register_next_step_handler(status_msg, process_episode_range)
             
     except Exception as e:
-        bot.edit_message_text(f"❌ சர்வர் பிழை: {str(e)}", chat_id, status_msg.message_id)
+        bot.edit_message_text(f"❌ பிழை: {str(e)}", chat_id, status_msg.message_id)
 
 # ==========================================
-# 6. Range Processing (எபிசோடு எண்களை டவுன்லோட் செய்ய)
+# 5. Range Processing 
 # ==========================================
 def process_episode_range(message):
     chat_id = message.chat.id
@@ -201,7 +167,7 @@ def process_episode_range(message):
         bot.register_next_step_handler(msg, process_episode_range)
 
 # ==========================================
-# 7. Core Downloader (FFmpeg)
+# 6. Core Downloader (FFmpeg)
 # ==========================================
 def download_episode_audio(episode_id):
     try:
@@ -234,11 +200,11 @@ def download_episode_audio(episode_id):
         return None, str(e)
 
 # ==========================================
-# 8. Bot Start
+# 7. Bot Start
 # ==========================================
 @bot.message_handler(commands=['start'])
 def send_welcome(message):
-    bot.reply_to(message, "👋 **வணக்கம்!**\n\nநான் Universe Coder Pocket FM Bot.\nகதையின் முழு லிங்க் அல்லது சிங்கிள் எபிசோடு லிங்கை அனுப்புங்கள்.")
+    bot.reply_to(message, "👋 **வணக்கம்!**\n\nகதையின் முழு லிங்க் அல்லது சிங்கிள் எபிசோடு லிங்கை அனுப்புங்கள்.")
 
-print("🤖 Universe Coder Bot Started...")
+print("🤖 Old is Gold Bot Started...")
 bot.polling(none_stop=True, skip_pending=True)
