@@ -8,12 +8,12 @@ import json
 from http.cookiejar import MozillaCookieJar
 
 # ==========================================
-# 🔥 1. Environment Variables (Render/Railway-ல் இவற்றைச் சேர்க்கவும்)
+# 🔥 1. Environment Variables (Render-ல் இவற்றைச் சேர்க்கவும்)
 # ==========================================
 BOT_TOKEN = os.getenv("TELEGRAM_TOKEN")
 POCKET_TOKEN = os.getenv("POCKET_TOKEN")
 
-# API_ID, API_HASH (இவை Pyrogram-க்கு மட்டும், இந்த போட்டில் தேவையில்லை)
+# API_ID, API_HASH (தேவையில்லை என்றாலும் வைத்துள்ளேன்)
 API_ID = os.getenv("API_ID")
 API_HASH = os.getenv("API_HASH")
 
@@ -21,10 +21,10 @@ if not BOT_TOKEN or not POCKET_TOKEN:
     raise ValueError("TELEGRAM_TOKEN மற்றும் POCKET_TOKEN கண்டிப்பாக Environment Variables-ல் இருக்க வேண்டும்!")
 
 # ==========================================
-# ⚙️ 2. Mobile API Headers (இதில் சரியான Token உள்ளது)
+# ⚙️ 2. Mobile API Headers (Pocket FM-யின் உண்மையான API ஹெடர்ஸ்)
 # ==========================================
 HEADERS = {
-    "Authorization": POCKET_TOKEN,  # ✅ "Bearer" உட்பட முழு Token இங்கே வரும்
+    "Authorization": POCKET_TOKEN,
     "X-Device-Id": "OPPO_CPH2219",
     "User-Agent": "PocketFM/6.5.0 (Android; 13; SM-G991B)",
     "Content-Type": "application/json",
@@ -185,7 +185,7 @@ def download_episode_audio(episode_id):
         return None, str(e)
 
 # ==========================================
-# 🚀 7. Start Command
+# 🚀 7. Start Command & Polling
 # ==========================================
 @bot.message_handler(commands=['start'])
 def send_welcome(message):
@@ -197,4 +197,6 @@ def send_welcome(message):
     )
 
 print("🤖 Ultimate Pocket FM Downloader Started...")
-bot.polling(none_stop=True)
+
+# 🔥 இந்த ஒரு வரிதான் 409 Conflict பிரச்சனையை சரி செய்யும்!
+bot.polling(none_stop=True, skip_pending=True)
