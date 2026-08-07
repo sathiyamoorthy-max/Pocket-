@@ -27,7 +27,7 @@ app = Flask(__name__)
 
 @app.route('/')
 def home():
-    return "🚀 Ultimate Pocket FM Downloader Bot Active 24/7!"
+    return "🚀 Pocket FM Downloader Bot Active 24/7!"
 
 def run_web_server():
     port = int(os.environ.get('PORT', 8080))
@@ -39,7 +39,6 @@ threading.Thread(target=run_web_server, daemon=True).start()
 # 3. Multi-Layer Bypass Engine (Cookie + Guest Token)
 # ==========================================
 session = requests.Session()
-
 MOBILE_HEADERS = {
     "User-Agent": "PocketFM/6.5.0 (Android; 13; SM-G991B)",
     "Accept": "*/*",
@@ -71,10 +70,10 @@ def get_main_menu():
 def send_welcome(message):
     bot.send_message(
         message.chat.id,
-        "👑 **Welcome to Ultimate Pocket FM Downloader Bot!**\n\n"
-        "⚡ **Multi-Layer Bypass + yt-dlp Engine Enabled!**\n"
-        "🚀 Ultra-Fast & 100% Reliable Download\n"
-        "🎧 Full Range, Batch & Single Download Support\n"
+        "👑 **Welcome to World Best Pocket FM Downloader Bot!**\n\n"
+        "⚡ **Auto Guest Token Enabled (No Cookies Needed!)**\n"
+        "🚀 Ultra-Fast Download (2 to 5 Seconds per Ep)\n"
+        "🎧 Full Range Download Support\n"
         "🖼️ HD Cover Photo + Track Details\n\n"
         "👇 *Choose an option below:*",
         reply_markup=get_main_menu(),
@@ -82,7 +81,7 @@ def send_welcome(message):
     )
 
 # ==========================================
-# 5. Fast Metadata Engine (Scraper + API)
+# 5. Fast Metadata Engine
 # ==========================================
 def fetch_episode_metadata(episode_id_or_url):
     ep_id = episode_id_or_url.split('/')[-1].split('?')[0]
@@ -113,7 +112,7 @@ def fetch_episode_metadata(episode_id_or_url):
     except Exception as e:
         print(f"Scraper Error: {e}")
 
-    # API Fallbacks
+    # API Fallbacks (v1 to v4)
     endpoints = [
         f"https://api.pocketfm.com/v2/episodes/{ep_id}",
         f"https://api.pocketfm.com/api/v1/episode/{ep_id}",
@@ -151,7 +150,7 @@ def fetch_episode_metadata(episode_id_or_url):
     return None, "Audio stream பெற முடியவில்லை."
 
 # ==========================================
-# 6. Ultra-Fast yt-dlp Downloader (Bypasses FFmpeg Exit 1)
+# 6. Hybrid Downloader (Requests Check + yt-dlp)
 # ==========================================
 def download_audio_and_thumb(ep_data):
     try:
@@ -173,7 +172,17 @@ def download_audio_and_thumb(ep_data):
             except Exception:
                 thumb_file = None
                 
-        # ⚡ Ultra Fast yt-dlp (Bypasses FFmpeg exit 1 errors)
+        # 🔥 Step 1: Test if stream URL is accessible using requests
+        try:
+            test_resp = session.get(clean_stream_url, timeout=10, stream=True)
+            if test_resp.status_code != 200:
+                return None, None, f"Stream URL returned {test_resp.status_code}. Check cookies.txt or IP Block."
+            # Read first few bytes to confirm it's not empty
+            next(test_resp.iter_content(chunk_size=1))
+        except Exception as e:
+            return None, None, f"Stream is not accessible: {str(e)}"
+                
+        # ⚡ Step 2: Ultra Fast yt-dlp (Only if stream is accessible)
         cmd = [
             'yt-dlp',
             '--no-check-certificates',
@@ -201,6 +210,8 @@ def download_audio_and_thumb(ep_data):
 
         return audio_file, thumb_file, None
         
+    except subprocess.TimeoutExpired:
+        return None, None, "yt-dlp timed out. The stream might be slow or blocked."
     except subprocess.CalledProcessError as e:
         return None, None, f"yt-dlp Error: {e.stderr.decode('utf-8') if e.stderr else str(e)}"
     except Exception as e:
@@ -404,7 +415,7 @@ def handle_refresh_button(message):
 
 @bot.message_handler(func=lambda message: message.text == "📊 About & Status")
 def handle_about_button(message):
-    bot.send_message(message.chat.id, "👑 **Ultimate Pocket FM Downloader Bot**\n\n⚡ yt-dlp + Multi-Layer Bypass Engine\n✅ 24/7 Web Server Enabled.\n✅ Auto Cookie & API Fallback.")
+    bot.send_message(message.chat.id, "👑 **Pocket FM Downloader Bot**\n\n⚡ Hybrid Downloader Engine\n✅ 24/7 Web Server Enabled.\n✅ Auto Cookie & API Fallback.")
 
-print("👑 Ultimate Master Bot Engine Started...")
+print("👑 Master Bot Engine Started...")
 bot.polling(none_stop=True, skip_pending=True)
