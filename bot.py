@@ -1,6 +1,7 @@
 import os
 import telebot
 import requests
+import re
 import subprocess
 import uuid
 import threading
@@ -12,11 +13,8 @@ from flask import Flask
 BOT_TOKEN = os.environ.get("TELEGRAM_TOKEN")
 POCKET_TOKEN = os.environ.get("POCKET_TOKEN")
 
-if not BOT_TOKEN or not POCKET_TOKEN:
-    print("⚠️ எச்சரிக்கை: TELEGRAM_TOKEN மற்றும் POCKET_TOKEN இணைக்கப்படவில்லை!")
-
 # ==========================================
-# 2. Render Dummy Web Server (24/7 ஆன்லைனில் இருக்க)
+# 2. Render Dummy Web Server
 # ==========================================
 app = Flask(__name__)
 
@@ -31,7 +29,7 @@ def run_web_server():
 threading.Thread(target=run_web_server, daemon=True).start()
 
 # ==========================================
-# 3. Mobile API Headers (403 பிழையைத் தவிர்க்க)
+# 3. Mobile API Headers
 # ==========================================
 HEADERS = {
     "Authorization": POCKET_TOKEN,
@@ -45,7 +43,28 @@ bot = telebot.TeleBot(BOT_TOKEN)
 user_states = {}
 
 # ==========================================
-# 4. 🔥 UNIVERSE LINK HANDLER (Episode & Show இரண்டிற்கும்)
+# 4. 🔥 AUTO NUMERIC ID CONVERTER (The Magic Fix)
+# ==========================================
+def get_numeric_id(url, is_episode=False):
+    try:
+        # சாதாரண பிரவுசர் போல சென்று வெப்சைட்டிலிருந்து ID-ஐ திருடுகிறோம் 
+        web_headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36"}
+        html = requests.get(url, headers=web_headers, timeout=15).text
+        
+        if is_episode:
+            match = re.search(r'"episode_?id"\s*:\s*"?(\d+)"?', html, re.IGNORECASE)
+        else:
+            match = re.search(r'"show_?id"\s*:\s*"?(\d+)"?', html, re.IGNORECASE)
+            
+        if match:
+            return match.group(1)
+        return None
+    except Exception as e:
+        print(f"Scraping Error: {e}")
+        return None
+
+# ==========================================
+# 5. UNIVERSE LINK HANDLER
 # ==========================================
 @bot.message_handler(func=lambda message: "pocketfm.com" in message.text)
 def handle_universal_link(message):
@@ -55,13 +74,25 @@ def handle_universal_link(message):
     status_msg = bot.reply_to(message, "🔍 யுனிவர்சல் கோடர்: லிங்கைச் சரிபார்க்கிறேன்...")
     
     try:
-        # Regex இல்லாமல் URL-ஐப் பிரிக்கும் பாதுகாப்பான முறை
         clean_url = url.split('?')[0].strip('/')
         extracted_id = clean_url.split('/')[-1]
+        is_episode = "/episode/" in clean_url
+        
+        # 🟢 ID எழுத்துக்களாக இருந்தால் (Hash), அதை எண்களாக மாற்றுகிறோம்
+        if not extracted_id.isdigit():
+            bot.edit_message_text("⚙️ Web Link கண்டறியப்பட்டது! Numeric ID-ஐ எடுக்கிறேன்...", chat_id, status_msg.message_id)
+            numeric_id = get_numeric_id(url, is_episode)
+            
+            if not numeric_id:
+                bot.edit_message_text("❌ பிழை: இந்த லிங்கிலிருந்து Numeric ID-ஐ எடுக்க முடியவில்லை.", chat_id, status_msg.message_id)
+                return
+            extracted_id = numeric_id
+            
+        # இப்போது extracted_id கண்டிப்பாக ஒரு எண்ணாக (Numeric) இருக்கும்!
         
         # 🟢 DIRECT EPISODE LINK
-        if "/episode/" in clean_url:
-            bot.edit_message_text("⏳ இது சிங்கிள் எபிசோடு. டவுன்லோட் ஆகிறது...", chat_id, status_msg.message_id)
+        if is_episode:
+            bot.edit_message_text(f"⏳ எபிசோடு ID [{extracted_id}] டவுன்லோட் ஆகிறது...", chat_id, status_msg.message_id)
             audio_file, error = download_episode_audio(extracted_id)
             
             if error:
@@ -86,7 +117,7 @@ def handle_universal_link(message):
                 bot.edit_message_text("❌ Token Error: புதிய Bearer Token-ஐ Render-ல் மாற்றவும்.", chat_id, status_msg.message_id)
                 return
             if resp.status_code != 200:
-                bot.edit_message_text(f"❌ API Error: 404 (லிங்க் தவறாக இருக்கலாம்)", chat_id, status_msg.message_id)
+                bot.edit_message_text(f"❌ API Error: {resp.status_code}", chat_id, status_msg.message_id)
                 return
                 
             data = resp.json()
@@ -105,14 +136,11 @@ def handle_universal_link(message):
             bot.edit_message_text(reply_text, chat_id, status_msg.message_id, parse_mode="Markdown")
             bot.register_next_step_handler(status_msg, process_episode_range)
             
-        else:
-            bot.edit_message_text("❌ இது சரியான Pocket FM லிங்க் இல்லை.", chat_id, status_msg.message_id)
-
     except Exception as e:
         bot.edit_message_text(f"❌ சர்வர் பிழை: {str(e)}", chat_id, status_msg.message_id)
 
 # ==========================================
-# 5. Range Processing (எபிசோடு எண்களை டவுன்லோட் செய்ய)
+# 6. Range Processing (எபிசோடு எண்களை டவுன்லோட் செய்ய)
 # ==========================================
 def process_episode_range(message):
     chat_id = message.chat.id
@@ -173,7 +201,7 @@ def process_episode_range(message):
         bot.register_next_step_handler(msg, process_episode_range)
 
 # ==========================================
-# 6. Core Downloader (FFmpeg)
+# 7. Core Downloader (FFmpeg)
 # ==========================================
 def download_episode_audio(episode_id):
     try:
@@ -206,7 +234,7 @@ def download_episode_audio(episode_id):
         return None, str(e)
 
 # ==========================================
-# 7. Start Command
+# 8. Bot Start
 # ==========================================
 @bot.message_handler(commands=['start'])
 def send_welcome(message):
