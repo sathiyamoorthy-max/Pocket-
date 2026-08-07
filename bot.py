@@ -72,8 +72,9 @@ def send_welcome(message):
         message.chat.id,
         "👑 **Welcome to World Best Pocket FM Downloader Bot!**\n\n"
         "✨ **Features Enabled:**\n"
+        "🟢 Auto 50MB File Compression (Fixes Error 413)\n"
         "🟢 Cloudfront HTTP 403 Bypass Engine\n"
-        "🟢 Pure Web Scraper + All API Fallbacks (v1 to v4)\n"
+        "🟢 Pure Web Scraper + All API Fallbacks\n"
         "🖼️ HD Cover Art + Track Title Metadata\n"
         "🎧 Range Download, Multi-Link & Full Series Support\n\n"
         "👇 *Choose an option below:*",
@@ -114,7 +115,7 @@ def fetch_episode_metadata(episode_id_or_url):
     except Exception as e:
         print(f"Web Scraper Warning: {e}")
 
-    # 2. All Working Pocket FM API Endpoints (Old + New Fallbacks)
+    # 2. All Working Pocket FM API Endpoints
     endpoints = [
         f"https://api.pocketfm.com/v2/episodes/{ep_id}",
         f"https://api.pocketfm.com/api/v1/episode/{ep_id}",
@@ -163,7 +164,6 @@ def download_audio_and_thumb(ep_data):
         audio_file = f"downloads/{unique_id}.mp3"
         thumb_file = f"downloads/{unique_id}.jpg" if ep_data.get('thumb_url') else None
         
-        # Clean URL
         clean_stream_url = ep_data['stream_url'].replace('\\', '').rstrip('/').strip()
         
         # Download Cover Image
@@ -175,7 +175,7 @@ def download_audio_and_thumb(ep_data):
             except Exception:
                 thumb_file = None
                 
-        # Advanced Stream Downloader via yt-dlp
+        # Stream Downloader via yt-dlp
         cmd = [
             'yt-dlp',
             '--no-check-certificates',
@@ -187,7 +187,7 @@ def download_audio_and_thumb(ep_data):
         
         subprocess.run(cmd, capture_output=True)
         
-        # Fallback to direct request download if yt-dlp fails
+        # Direct Request Fallback
         if not os.path.exists(audio_file) or os.path.getsize(audio_file) == 0:
             resp = session.get(clean_stream_url, stream=True, timeout=20)
             if resp.status_code == 200:
@@ -196,6 +196,20 @@ def download_audio_and_thumb(ep_data):
                         if chunk: f.write(chunk)
             else:
                 return None, None, f"Stream Download Error: {resp.status_code}"
+
+        # 🚀 AUTO COMPRESSION FOR 50MB TELEGRAM LIMIT (Fixes Error 413)
+        if os.path.exists(audio_file):
+            file_size_mb = os.path.getsize(audio_file) / (1024 * 1024)
+            if file_size_mb >= 49.0:
+                compressed_file = f"downloads/compressed_{unique_id}.mp3"
+                compress_cmd = [
+                    'ffmpeg', '-y', '-i', audio_file,
+                    '-b:a', '64k', compressed_file
+                ]
+                subprocess.run(compress_cmd, capture_output=True)
+                if os.path.exists(compressed_file):
+                    os.remove(audio_file)
+                    audio_file = compressed_file
 
         return audio_file, thumb_file, None
         
@@ -373,7 +387,7 @@ def handle_refresh_button(message):
 
 @bot.message_handler(func=lambda message: message.text == "📊 About & Status")
 def handle_about_button(message):
-    bot.send_message(message.chat.id, "👑 **World Best Pocket FM Downloader Bot**\n\n✅ Cloudfront Bypass Engine\n✅ Web Scraper + All API Fallbacks\n✅ HD Cover Art & Track Title\n✅ 24/7 Web Server Enabled.")
+    bot.send_message(message.chat.id, "👑 **World Best Pocket FM Downloader Bot**\n\n✅ Auto 50MB File Compression\n✅ Cloudfront Bypass Engine\n✅ Web Scraper + All API Fallbacks\n✅ HD Cover Art & Track Title\n✅ 24/7 Web Server Enabled.")
 
 # ==========================================
 # 10. Start Polling
