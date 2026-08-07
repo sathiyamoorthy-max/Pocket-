@@ -17,4 +17,4 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY . .
 
 # பாட்டை ரன் செய்கிறோம் (உங்கள் பைதான் ஃபைல் பெயர் main.py எனில்)
-CMD ["python", "main.py"]
+CMD ["python", "bot.py"]
