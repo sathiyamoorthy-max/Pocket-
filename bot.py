@@ -10,7 +10,7 @@ from flask import Flask
 import telebot
 from telebot.types import ReplyKeyboardMarkup, KeyboardButton
 
-# FFmpeg Auto Setup
+# Auto FFmpeg Setup for Cloud Servers
 import static_ffmpeg
 static_ffmpeg.add_paths()
 
@@ -74,8 +74,8 @@ def send_welcome(message):
         message.chat.id,
         "👑 **Welcome to World Best Pocket FM Downloader Bot!**\n\n"
         "✨ **Features Enabled:**\n"
-        "🟢 Auto FFmpeg Engine (Static Setup)\n"
-        "🟢 Pure Web Scraper + Multi-API Fallback\n"
+        "🟢 Auto FFmpeg Engine (URL & Headers Cleaner)\n"
+        "🟢 Pure Web Scraper + Multi-API Engine\n"
         "🖼️ HD Cover Art + Track Title Metadata\n"
         "🎧 Range Download, Multi-Link & Full Series Support\n\n"
         "👇 *Choose an option below:*",
@@ -84,12 +84,12 @@ def send_welcome(message):
     )
 
 # ==========================================
-# 5. Core Multi-Engine (Web Scraper + API)
+# 5. Core Multi-Engine (Scraper + API)
 # ==========================================
 def fetch_episode_metadata(episode_id_or_url):
     ep_id = episode_id_or_url.split('/')[-1].split('?')[0]
     
-    # 1. Try Web Scraper First (Direct Page Extraction)
+    # 1. Direct Web Scraper
     try:
         web_url = f"https://www.pocketfm.com/episode/{ep_id}" if not episode_id_or_url.startswith("http") else episode_id_or_url
         web_resp = session.get(web_url, timeout=15)
@@ -116,7 +116,7 @@ def fetch_episode_metadata(episode_id_or_url):
     except Exception as e:
         print(f"Web Scraper Warning: {e}")
 
-    # 2. API Fallback Endpoints (v2, v3, v4)
+    # 2. API Fallback (v2, v3, v4)
     endpoints = [
         f"https://api.pocketfm.com/v2/episodes/{ep_id}",
         f"https://api.pocketfm.com/v3/episodes/{ep_id}",
@@ -152,7 +152,7 @@ def fetch_episode_metadata(episode_id_or_url):
         except Exception:
             continue
             
-    return None, "Audio stream எடுக்க முடியவில்லை. இது பிரீமியம் எபிசோடாக இருந்தால், லாகின் செய்யப்பட்ட `cookies.txt` தேவைப்படும்."
+    return None, "Audio stream எடுக்க முடியவில்லை. புது `cookies.txt` தேவைப்படலாம்."
 
 def download_audio_and_thumb(ep_data):
     try:
@@ -163,6 +163,10 @@ def download_audio_and_thumb(ep_data):
         audio_file = f"downloads/{unique_id}.mp3"
         thumb_file = f"downloads/{unique_id}.jpg" if ep_data.get('thumb_url') else None
         
+        # 🔥 FIX 1: Clean trailing slash / backslash from URL
+        clean_stream_url = ep_data['stream_url'].rstrip('\\/').strip()
+        
+        # Download Cover Image
         if ep_data.get('thumb_url'):
             try:
                 img_bytes = session.get(ep_data['thumb_url'], timeout=10).content
@@ -171,12 +175,11 @@ def download_audio_and_thumb(ep_data):
             except Exception:
                 thumb_file = None
                 
-        user_agent_header = "User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36\r\n"
-        
+        # 🔥 FIX 2: Standard user-agent flag for FFmpeg (Bypasses Exit Status 8)
         cmd = [
             'ffmpeg', '-y',
-            '-headers', user_agent_header,
-            '-i', ep_data['stream_url'],
+            '-user_agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+            '-i', clean_stream_url,
             '-c', 'copy',
             '-bsf:a', 'aac_adtstoasc',
             audio_file
@@ -184,8 +187,13 @@ def download_audio_and_thumb(ep_data):
         
         subprocess.run(cmd, check=True, capture_output=True)
         return audio_file, thumb_file, None
+        
+    except subprocess.CalledProcessError as e:
+        error_logs = e.stderr.decode('utf-8') if e.stderr else str(e)
+        print(f"FFmpeg Error Log: {error_logs}")
+        return None, None, f"FFmpeg Error: Stream-ஐ மாற்றுவதில் சிக்கல்."
     except Exception as e:
-        return None, None, f"FFmpeg Error: {str(e)}"
+        return None, None, str(e)
 
 # ==========================================
 # 6. Single & Multi-Link Handler
@@ -357,10 +365,10 @@ def handle_refresh_button(message):
 
 @bot.message_handler(func=lambda message: message.text == "📊 About & Status")
 def handle_about_button(message):
-    bot.send_message(message.chat.id, "👑 **World Best Pocket FM Downloader Bot**\n\n✅ FFmpeg Static Engine\n✅ Web Scraper + API Engine\n✅ HD Cover Art & Track Title\n✅ 24/7 Web Server Enabled.")
+    bot.send_message(message.chat.id, "👑 **World Best Pocket FM Downloader Bot**\n\n✅ FFmpeg Clean Engine\n✅ Web Scraper + API Engine\n✅ HD Cover Art & Track Title\n✅ 24/7 Web Server Enabled.")
 
 # ==========================================
 # 10. Start Polling
 # ==========================================
-print("👑 Ultimate Re-written Bot Started...")
+print("👑 Master Bot Engine Started...")
 bot.polling(none_stop=True, skip_pending=True)
