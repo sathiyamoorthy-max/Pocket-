@@ -1,27 +1,37 @@
 import os
 import telebot
 import requests
-import re
 import subprocess
 import uuid
-import json
-from http.cookiejar import MozillaCookieJar
+import threading
+from flask import Flask
 
 # ==========================================
-# 🔥 1. Environment Variables (Render-ல் இவற்றைச் சேர்க்கவும்)
+# 1. Environment Variables 
 # ==========================================
-BOT_TOKEN = os.getenv("TELEGRAM_TOKEN")
-POCKET_TOKEN = os.getenv("POCKET_TOKEN")
-
-# API_ID, API_HASH (தேவையில்லை என்றாலும் வைத்துள்ளேன்)
-API_ID = os.getenv("API_ID")
-API_HASH = os.getenv("API_HASH")
+BOT_TOKEN = os.environ.get("TELEGRAM_TOKEN")
+POCKET_TOKEN = os.environ.get("POCKET_TOKEN")
 
 if not BOT_TOKEN or not POCKET_TOKEN:
-    raise ValueError("TELEGRAM_TOKEN மற்றும் POCKET_TOKEN கண்டிப்பாக Environment Variables-ல் இருக்க வேண்டும்!")
+    print("⚠️ எச்சரிக்கை: TELEGRAM_TOKEN மற்றும் POCKET_TOKEN இணைக்கப்படவில்லை!")
 
 # ==========================================
-# ⚙️ 2. Mobile API Headers (Pocket FM-யின் உண்மையான API ஹெடர்ஸ்)
+# 2. Render Dummy Web Server (24/7 ஆன்லைனில் இருக்க)
+# ==========================================
+app = Flask(__name__)
+
+@app.route('/')
+def home():
+    return "Universe Coder Pocket FM Bot is ALIVE! 🚀"
+
+def run_web_server():
+    port = int(os.environ.get('PORT', 8080))
+    app.run(host='0.0.0.0', port=port)
+
+threading.Thread(target=run_web_server, daemon=True).start()
+
+# ==========================================
+# 3. Mobile API Headers (403 பிழையைத் தவிர்க்க)
 # ==========================================
 HEADERS = {
     "Authorization": POCKET_TOKEN,
@@ -31,73 +41,85 @@ HEADERS = {
     "Accept": "application/json"
 }
 
-# ==========================================
-# 🤖 3. Bot Setup
-# ==========================================
 bot = telebot.TeleBot(BOT_TOKEN)
-user_states = {}  # பயனர் தரவுகளை தற்காலிகமாக சேமிக்க
+user_states = {}
 
 # ==========================================
-# 🎬 4. Series லிங்கை கையாளும் பகுதி
+# 4. 🔥 UNIVERSE LINK HANDLER (Episode & Show இரண்டிற்கும்)
 # ==========================================
-@bot.message_handler(regexp=r"pocketfm\.com/show/")
-def handle_show_link(message):
+@bot.message_handler(func=lambda message: "pocketfm.com" in message.text)
+def handle_universal_link(message):
     chat_id = message.chat.id
     url = message.text.strip()
     
-    bot.reply_to(message, "🔍 Series விவரங்களை API மூலம் பெறுகிறேன்...")
+    status_msg = bot.reply_to(message, "🔍 யுனிவர்சல் கோடர்: லிங்கைச் சரிபார்க்கிறேன்...")
     
     try:
-        match = re.search(r'/show/([a-zA-Z0-9_-]+)', url)
-        if not match:
-            bot.send_message(chat_id, "❌ தவறான Show லிங்க்.")
-            return
+        # Regex இல்லாமல் URL-ஐப் பிரிக்கும் பாதுகாப்பான முறை
+        clean_url = url.split('?')[0].strip('/')
+        extracted_id = clean_url.split('/')[-1]
+        
+        # 🟢 DIRECT EPISODE LINK
+        if "/episode/" in clean_url:
+            bot.edit_message_text("⏳ இது சிங்கிள் எபிசோடு. டவுன்லோட் ஆகிறது...", chat_id, status_msg.message_id)
+            audio_file, error = download_episode_audio(extracted_id)
             
-        show_id = match.group(1).split('?')[0]
-        
-        # 🔥 Series-ன் Episode List-ஐ பெறுதல்
-        api_url = f"https://api.pocketfm.com/api/v1/show/{show_id}"
-        resp = requests.get(api_url, headers=HEADERS, timeout=30)
-        
-        if resp.status_code == 401 or resp.status_code == 403:
-            bot.send_message(chat_id, "❌ Token காலாவதியாகிவிட்டது. புதிய Token-ஐ DevTools-ல் இருந்து எடுத்து Environment Variables-ல் மாற்றவும்.")
-            return
-        if resp.status_code != 200:
-            bot.send_message(chat_id, f"❌ API Error: {resp.status_code}")
-            return
+            if error:
+                bot.edit_message_text(f"❌ பிழை: {error}", chat_id, status_msg.message_id)
+                return
+                
+            bot.edit_message_text("⬆️ அப்லோட் ஆகிறது...", chat_id, status_msg.message_id)
+            try:
+                with open(audio_file, 'rb') as f:
+                    bot.send_audio(chat_id, f, title=f"Episode - {extracted_id}", performer="Pocket FM")
+            finally:
+                if audio_file and os.path.exists(audio_file):
+                    os.remove(audio_file)
+            bot.delete_message(chat_id, status_msg.message_id)
             
-        data = resp.json()
-        series_title = data.get('title', 'Pocket FM Series')
-        episodes = data.get('episodes', [])
-        
-        episode_data = [
-            {'id': ep['id'], 'title': ep.get('title', f"Episode {i+1}")} 
-            for i, ep in enumerate(episodes)
-        ]
-        
-        user_states[chat_id] = {
-            'show_id': show_id,
-            'series_title': series_title,
-            'episode_data': episode_data,
-            'total': len(episode_data)
-        }
-        
-        reply_text = f"🎧 **Series Selected:** {series_title}\n📊 **Total Episodes:** {len(episode_data)}\n\n💬 *Send track number(s):*\nSingle: `7`\nRange: `21 125`"
-        msg = bot.send_message(chat_id, reply_text, parse_mode="Markdown")
-        bot.register_next_step_handler(msg, process_episode_range)
-        
+        # 🔵 FULL SHOW LINK
+        elif "/show/" in clean_url:
+            api_url = f"https://api.pocketfm.com/api/v1/show/{extracted_id}"
+            resp = requests.get(api_url, headers=HEADERS, timeout=30)
+            
+            if resp.status_code in [401, 403]:
+                bot.edit_message_text("❌ Token Error: புதிய Bearer Token-ஐ Render-ல் மாற்றவும்.", chat_id, status_msg.message_id)
+                return
+            if resp.status_code != 200:
+                bot.edit_message_text(f"❌ API Error: 404 (லிங்க் தவறாக இருக்கலாம்)", chat_id, status_msg.message_id)
+                return
+                
+            data = resp.json()
+            series_title = data.get('title', 'Pocket FM Series')
+            episodes = data.get('episodes', [])
+            episode_data = [{'id': ep['id'], 'title': ep.get('title', f"Episode {i+1}")} for i, ep in enumerate(episodes)]
+            
+            user_states[chat_id] = {
+                'show_id': extracted_id,
+                'series_title': series_title,
+                'episode_data': episode_data,
+                'total': len(episode_data)
+            }
+            
+            reply_text = f"🎧 **Series:** {series_title}\n📊 **Total Episodes:** {len(episode_data)}\n\n💬 எபிசோடு எண்களை அனுப்பவும்.\n(உதாரணம்: `7` அல்லது `1 15`)"
+            bot.edit_message_text(reply_text, chat_id, status_msg.message_id, parse_mode="Markdown")
+            bot.register_next_step_handler(status_msg, process_episode_range)
+            
+        else:
+            bot.edit_message_text("❌ இது சரியான Pocket FM லிங்க் இல்லை.", chat_id, status_msg.message_id)
+
     except Exception as e:
-        bot.send_message(chat_id, f"❌ பிழை: {str(e)}")
+        bot.edit_message_text(f"❌ சர்வர் பிழை: {str(e)}", chat_id, status_msg.message_id)
 
 # ==========================================
-# 📊 5. Episode Range-ஐ Smart ஆக பிரிக்கும் பகுதி
+# 5. Range Processing (எபிசோடு எண்களை டவுன்லோட் செய்ய)
 # ==========================================
 def process_episode_range(message):
     chat_id = message.chat.id
     text = message.text.strip()
     
     if chat_id not in user_states:
-        bot.send_message(chat_id, "❌ Session முடிந்தது. மீண்டும் Show லிங்கை அனுப்பவும்.")
+        bot.send_message(chat_id, "❌ Session முடிந்தது. மீண்டும் லிங்கை அனுப்பவும்.")
         return
         
     data = user_states[chat_id]
@@ -115,42 +137,43 @@ def process_episode_range(message):
             bot.register_next_step_handler(msg, process_episode_range)
             return
             
-        if start_ep < 1: start_ep = 1
-        if end_ep > total_eps: end_ep = total_eps
+        start_ep = max(1, start_ep)
+        end_ep = min(total_eps, end_ep)
+        
         if start_ep > end_ep:
             bot.send_message(chat_id, "❌ தொடக்க எண் இறுதி எண்ணை விட அதிகமாக இருக்கக்கூடாது.")
             return
             
-        bot.send_message(chat_id, f"⏳ Downloading Ep {start_ep} to {end_ep}...")
+        total_to_download = (end_ep - start_ep) + 1
+        progress_msg = bot.send_message(chat_id, f"⏳ 0/{total_to_download} டவுன்லோட் ஆகிறது...")
         selected_episodes = episode_data[start_ep-1:end_ep]
         
         for i, ep in enumerate(selected_episodes, start=1):
             ep_id = ep['id']
             ep_title = ep['title']
             
+            bot.edit_message_text(f"⏳ டவுன்லோட் ஆகிறது: {i}/{total_to_download}\n(Ep {start_ep + i - 1}: {ep_title})", chat_id, progress_msg.message_id)
+            
             audio_file, error = download_episode_audio(ep_id)
             if error:
                 bot.send_message(chat_id, f"⚠️ Ep {start_ep + i - 1} failed: {error}")
             else:
-                with open(audio_file, 'rb') as f:
-                    bot.send_audio(
-                        chat_id, 
-                        f, 
-                        title=f"Ep {start_ep + i - 1} - {ep_title}",
-                        performer="Pocket FM"
-                    )
-                if os.path.exists(audio_file):
-                    os.remove(audio_file)
-                    
+                try:
+                    with open(audio_file, 'rb') as f:
+                        bot.send_audio(chat_id, f, title=f"Ep {start_ep + i - 1} - {ep_title}", performer="Pocket FM")
+                finally:
+                    if audio_file and os.path.exists(audio_file):
+                        os.remove(audio_file)
+                        
         del user_states[chat_id]
-        bot.send_message(chat_id, "✅ All requested episodes sent successfully!")
+        bot.edit_message_text("✅ அனைத்து எபிசோடுகளும் வெற்றிகரமாக அனுப்பப்பட்டன!", chat_id, progress_msg.message_id)
         
     except ValueError:
         msg = bot.send_message(chat_id, "❌ எண்களை மட்டும் அனுப்பவும் (எ.கா: `1 15`).")
         bot.register_next_step_handler(msg, process_episode_range)
 
 # ==========================================
-# 🎵 6. Core Downloader (M3U8 Fetch + FFmpeg)
+# 6. Core Downloader (FFmpeg)
 # ==========================================
 def download_episode_audio(episode_id):
     try:
@@ -167,11 +190,11 @@ def download_episode_audio(episode_id):
             stream_url = playback.get('url')
             
         if not stream_url:
-            return None, "M3U8 ஸ்ட்ரீம் URL கிடைக்கவில்லை."
+            return None, "M3U8 URL கிடைக்கவில்லை."
             
-        # FFmpeg Download & Convert
         unique_name = str(uuid.uuid4())[:8]
         output_file = f"downloads/{unique_name}.mp3"
+        
         if not os.path.exists('downloads'):
             os.makedirs('downloads')
             
@@ -179,24 +202,15 @@ def download_episode_audio(episode_id):
         subprocess.run(cmd, check=True, capture_output=True)
         return output_file, None
         
-    except subprocess.CalledProcessError:
-        return None, "FFmpeg conversion failed. FFmpeg installed?"
     except Exception as e:
         return None, str(e)
 
 # ==========================================
-# 🚀 7. Start Command & Polling
+# 7. Start Command
 # ==========================================
 @bot.message_handler(commands=['start'])
 def send_welcome(message):
-    bot.reply_to(
-        message,
-        "👋 **வணக்கம்!**\n\n"
-        "இது **Ultimate Pocket FM Downloader Bot**.\n"
-        "Pocket FM-ன் Series லிங்கை (URL) அனுப்பினால், எந்த 403 பிழையும் இல்லாமல் டவுன்லோட் செய்யும்!"
-    )
+    bot.reply_to(message, "👋 **வணக்கம்!**\n\nநான் Universe Coder Pocket FM Bot.\nகதையின் முழு லிங்க் அல்லது சிங்கிள் எபிசோடு லிங்கை அனுப்புங்கள்.")
 
-print("🤖 Ultimate Pocket FM Downloader Started...")
-
-# 🔥 இந்த ஒரு வரிதான் 409 Conflict பிரச்சனையை சரி செய்யும்!
+print("🤖 Universe Coder Bot Started...")
 bot.polling(none_stop=True, skip_pending=True)
