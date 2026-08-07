@@ -4,7 +4,6 @@ import uuid
 import threading
 import subprocess
 import requests
-import time
 from bs4 import BeautifulSoup
 from http.cookiejar import MozillaCookieJar
 from flask import Flask
@@ -21,17 +20,14 @@ if not BOT_TOKEN:
 bot = telebot.TeleBot(BOT_TOKEN)
 user_states = {}
 
-if not os.path.exists('downloads'):
-    os.makedirs('downloads')
-
 # ==========================================
-# 2. 24/7 Web Server (Flask)
+# 2. Render 24/7 Web Server
 # ==========================================
 app = Flask(__name__)
 
 @app.route('/')
 def home():
-    return "🚀 Ultimate Pocket FM Downloader Bot is Active!"
+    return "🚀 Ultimate Pocket FM Downloader Bot Active 24/7!"
 
 def run_web_server():
     port = int(os.environ.get('PORT', 8080))
@@ -40,17 +36,20 @@ def run_web_server():
 threading.Thread(target=run_web_server, daemon=True).start()
 
 # ==========================================
-# 3. Ultimate Bypass Engine (Cookies + Auto Guest Token)
+# 3. Old Working Logic Headers (This is the key!)
 # ==========================================
 session = requests.Session()
-MOBILE_HEADERS = {
-    "User-Agent": "PocketFM/6.5.0 (Android; 13; SM-G991B)",
-    "Referer": "https://www.pocketfm.com/",
-    "Origin": "https://www.pocketfm.com"
-}
-session.headers.update(MOBILE_HEADERS)
 
-# 🔥 Auto Guest Token Generator (Fallback if cookies.txt fails)
+# 🔥 This exact User-Agent and Headers made your old script work. Do NOT change.
+HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36",
+    "Accept": "*/*",
+    "Accept-Language": "en-US,en;q=0.9",
+    "Referer": "https://www.pocketfm.com/"
+}
+session.headers.update(HEADERS)
+
+# 🔥 Auto Guest Token Generator (New Feature)
 def generate_guest_bearer_token():
     try:
         guest_url = "https://api.pocketfm.com/v2/users/guest"
@@ -72,92 +71,149 @@ def generate_guest_bearer_token():
         print(f"⚠️ Guest Token Generation Failed: {e}")
     return None
 
-# Load Cookies and Auth Token
-def load_auth_engine():
-    """Loads cookies and sets the Authorization Bearer token."""
-    if os.path.exists('cookies.txt'):
-        try:
-            cj = MozillaCookieJar('cookies.txt')
-            cj.load(ignore_discard=True, ignore_expires=True)
-            session.cookies = cj
-            for cookie in cj:
-                if cookie.name == 'auth-token':
-                    session.headers.update({"Authorization": f"Bearer {cookie.value}"})
-            return True
-        except Exception as e:
-            print(f"Auth Error: {e}")
+GUEST_TOKEN = generate_guest_bearer_token()
+if GUEST_TOKEN:
+    session.headers.update({"Authorization": f"Bearer {GUEST_TOKEN}"})
+
+# 🔥 Load Cookies (Old Working Method)
+COOKIE_FILE = 'cookies.txt'
+if os.path.exists(COOKIE_FILE):
+    try:
+        cj = MozillaCookieJar(COOKIE_FILE)
+        cj.load()
+        session.cookies = cj
+        print("✅ cookies.txt Loaded Successfully!")
+    except Exception as e:
+        print(f"⚠️ Cookie Warning: {e}")
+
+# ==========================================
+# 4. Interactive Keyboards
+# ==========================================
+def get_main_menu():
+    markup = ReplyKeyboardMarkup(resize_keyboard=True, one_time_keyboard=False)
+    markup.add(KeyboardButton("🔍 Download Series"), KeyboardButton("📥 Single/Multi Episode"))
+    markup.add(KeyboardButton("🔄 Refresh Cookies"), KeyboardButton("📊 About & Status"))
+    return markup
+
+@bot.message_handler(commands=['start', 'menu', 'help'])
+def send_welcome(message):
+    bot.send_message(
+        message.chat.id,
+        "👑 **Welcome to Ultimate Pocket FM Downloader Bot!**\n\n"
+        "⚡ **Old Working Engine + Auto Guest Token!**\n"
+        "🚀 Ultra-Fast Download\n"
+        "🎧 Full Range Download Support\n"
+        "🖼️ HD Cover Photo + Track Details\n\n"
+        "👇 *Choose an option below:*",
+        reply_markup=get_main_menu(),
+        parse_mode="Markdown"
+    )
+
+# ==========================================
+# 5. Fast Metadata Engine (Old Logic)
+# ==========================================
+def fetch_episode_metadata(episode_id_or_url):
+    ep_id = episode_id_or_url.split('/')[-1].split('?')[0]
     
-    # 🔥 Fallback: If cookies.txt fails, try Guest Token
-    guest_token = generate_guest_bearer_token()
-    if guest_token:
-        session.headers.update({"Authorization": f"Bearer {guest_token}"})
-        return True
+    # Web Scraper
+    try:
+        web_url = f"https://www.pocketfm.com/episode/{ep_id}" if not episode_id_or_url.startswith("http") else episode_id_or_url
+        web_resp = session.get(web_url, timeout=10)
+        if web_resp.status_code == 200:
+            soup = BeautifulSoup(web_resp.text, 'html.parser')
+            title_tag = soup.find('meta', property='og:title')
+            image_tag = soup.find('meta', property='og:image')
+            
+            ep_title = title_tag['content'] if title_tag else f"Episode - {ep_id}"
+            thumb_url = image_tag['content'] if image_tag else None
+            
+            script_tags = soup.find_all('script')
+            for script in script_tags:
+                if script.string and ('m3u8' in script.string or 'cloudfront' in script.string or 'mp3' in script.string):
+                    matches = re.findall(r'https?://[^\s"\']+\.(?:m3u8|mp3)[^\s"\']*', script.string)
+                    if matches:
+                        return {
+                            'stream_url': matches[0],
+                            'ep_title': ep_title,
+                            'show_title': "Pocket FM",
+                            'thumb_url': thumb_url
+                        }, None
+    except Exception as e:
+        print(f"Scraper Error: {e}")
+
+    # API Fallbacks (Old V1, V2, V3)
+    endpoints = [
+        f"https://api.pocketfm.com/v2/episodes/{ep_id}",
+        f"https://api.pocketfm.com/api/v1/episode/{ep_id}",
+        f"https://api.pocketfm.com/v3/episodes/{ep_id}"
+    ]
     
-    return False
-
-load_auth_engine()
-
-# ==========================================
-# 4. Progress Bar Utility
-# ==========================================
-def get_progress_bar(current, total):
-    percentage = current / total
-    completed = int(percentage * 10)
-    bar = "■" * completed + "□" * (10 - completed)
-    return f"[{bar}] {int(percentage * 100)}%"
-
-# ==========================================
-# 5. Core Processing Engine (Multi-API)
-# ==========================================
-def fetch_metadata(url_or_id):
-    ep_id = url_or_id.split('/')[-1].split('?')[0]
-    # Check multiple API versions for stability
-    for version in ['v2', 'v3', 'v4']:
+    for url in endpoints:
         try:
-            url = f"https://api.pocketfm.com/{version}/episodes/{ep_id}"
-            resp = session.get(url, timeout=10)
+            resp = session.get(url, timeout=8)
             if resp.status_code == 200:
                 data = resp.json()
-                stream = data.get('audioUrl') or data.get('streamUrl') or data.get('mediaUrl')
-                if not stream and 'playbackInfo' in data:
-                    stream = data['playbackInfo'].get('url')
-                
-                if stream:
+                stream_url = data.get('audioUrl') or data.get('streamUrl') or data.get('mediaUrl')
+                if not stream_url and isinstance(data.get('playbackInfo'), dict):
+                    stream_url = data['playbackInfo'].get('url') or data['playbackInfo'].get('streamUrl')
+                    
+                ep_title = data.get('title', f"Episode - {ep_id}")
+                show_title = "Pocket FM"
+                if isinstance(data.get('show'), dict):
+                    show_title = data['show'].get('title', 'Pocket FM')
+                    
+                thumb_url = data.get('coverUrl') or data.get('imageUrl')
+                if not thumb_url and isinstance(data.get('show'), dict):
+                    thumb_url = data['show'].get('coverUrl') or data['show'].get('imageUrl')
+                    
+                if stream_url:
                     return {
-                        'stream_url': stream,
-                        'ep_title': data.get('title', f"Episode {ep_id}"),
-                        'show_title': data.get('show', {}).get('title', "Pocket FM"),
-                        'thumb_url': data.get('coverUrl') or data.get('show', {}).get('coverUrl')
+                        'stream_url': stream_url,
+                        'ep_title': ep_title,
+                        'show_title': show_title,
+                        'thumb_url': thumb_url
                     }, None
-        except: continue
-    return None, "Episode is locked or API changed."
+        except Exception:
+            continue
+            
+    return None, "Audio stream எடுக்க முடியவில்லை. புது cookies.txt தேவைப்படலாம்."
 
 # ==========================================
-# 6. Ultra-Fast Downloader (FFmpeg + 50MB Auto Compress)
+# 6. Ultra-Fast FFmpeg Downloader
 # ==========================================
-def download_audio(ep_data, chat_id, status_msg):
-    unique_id = str(uuid.uuid4())[:8]
-    audio_file = f"downloads/{unique_id}.mp3"
-    thumb_file = f"downloads/{unique_id}.jpg"
-    
-    # 1. Download Thumbnail
-    if ep_data.get('thumb_url'):
-        try:
-            r = session.get(ep_data['thumb_url'], timeout=5)
-            with open(thumb_file, 'wb') as f: f.write(r.content)
-        except: thumb_file = None
-
-    # 2. Fast Download using FFmpeg
-    bot.edit_message_text(f"📥 **Downloading:**\n{ep_data['ep_title']}\n{get_progress_bar(30, 100)}", chat_id, status_msg)
-    
+def download_audio_and_thumb(ep_data):
     try:
-        cmd = [
-            'ffmpeg', '-y', '-user_agent', MOBILE_HEADERS['User-Agent'],
-            '-i', ep_data['stream_url'], '-c', 'copy', '-bsf:a', 'aac_adtstoasc', audio_file
-        ]
-        subprocess.run(cmd, check=True, capture_output=True, timeout=60)
+        if not os.path.exists('downloads'):
+            os.makedirs('downloads')
+            
+        unique_id = str(uuid.uuid4())[:8]
+        audio_file = f"downloads/{unique_id}.mp3"
+        thumb_file = f"downloads/{unique_id}.jpg" if ep_data.get('thumb_url') else None
         
-        # 🔥 Auto 50MB Compression for Telegram Limit
+        clean_stream_url = ep_data['stream_url'].replace('\\', '').rstrip('/').strip()
+        
+        # Download Cover Image
+        if ep_data.get('thumb_url'):
+            try:
+                img_bytes = session.get(ep_data['thumb_url'], timeout=8).content
+                with open(thumb_file, 'wb') as f:
+                    f.write(img_bytes)
+            except Exception:
+                thumb_file = None
+                
+        # ⚡ Ultra Fast FFmpeg Direct Copy
+        cmd = [
+            'ffmpeg', '-y',
+            '-user_agent', HEADERS['User-Agent'],
+            '-i', clean_stream_url,
+            '-c', 'copy',
+            '-bsf:a', 'aac_adtstoasc',
+            audio_file
+        ]
+        
+        subprocess.run(cmd, check=True, capture_output=True, timeout=30)
+
+        # Auto Compress for 50MB Limit
         if os.path.exists(audio_file):
             file_size_mb = os.path.getsize(audio_file) / (1024 * 1024)
             if file_size_mb >= 49.0:
@@ -167,115 +223,211 @@ def download_audio(ep_data, chat_id, status_msg):
                 if os.path.exists(compressed_file):
                     os.remove(audio_file)
                     audio_file = compressed_file
-        
-        bot.edit_message_text(f"📤 **Uploading to Telegram...**\n{get_progress_bar(80, 100)}", chat_id, status_msg)
+
         return audio_file, thumb_file, None
+        
     except Exception as e:
-        return None, None, str(e)
+        return None, None, f"Download Error: {str(e)}"
 
 # ==========================================
-# 7. Telegram Handlers
+# 7. Single / Multi Episode Handler
 # ==========================================
-def main_menu():
-    markup = ReplyKeyboardMarkup(resize_keyboard=True)
-    markup.add(KeyboardButton("🔍 Download Series"), KeyboardButton("📥 Episode Link"))
-    markup.add(KeyboardButton("🔄 Refresh Auth"), KeyboardButton("📊 Bot Status"))
-    return markup
-
-@bot.message_handler(commands=['start'])
-def start(message):
-    bot.send_message(message.chat.id, "👑 **Ultimate Pocket FM Downloader**\n\n✅ Auto Guest Token & Cookie Bypass Enabled!\nSend a `/show/` or `/episode/` link.", reply_markup=main_menu())
-
-@bot.message_handler(func=lambda m: m.text == "🔄 Refresh Auth")
-def refresh(message):
-    if load_auth_engine():
-        bot.send_message(message.chat.id, "✅ Auth successfully refreshed from cookies.txt/Guest Token!")
-    else:
-        bot.send_message(message.chat.id, "❌ Authentication failed. cookies.txt or Guest Token not available.")
-
-@bot.message_handler(func=lambda m: "pocketfm.com/episode/" in m.text)
-def single_ep(message):
-    url = re.search(r'(https?://[^\s]+)', message.text).group(0)
-    status = bot.send_message(message.chat.id, "🔍 Searching...")
+@bot.message_handler(regexp=r"pocketfm\.com/episode/")
+def handle_single_or_multi_episodes(message):
+    chat_id = message.chat.id
+    text = message.text.strip()
+    links = [line.strip() for line in text.splitlines() if "pocketfm.com/episode/" in line]
     
-    ep_data, err = fetch_metadata(url)
-    if err:
-        bot.edit_message_text(f"❌ Error: {err}", message.chat.id, status.message_id)
-        return
-
-    file, thumb, d_err = download_audio(ep_data, message.chat.id, status.message_id)
-    if not d_err:
-        with open(file, 'rb') as f:
-            t = open(thumb, 'rb') if thumb else None
-            bot.send_audio(message.chat.id, f, title=ep_data['ep_title'], 
-                           performer=ep_data['show_title'], thumb=t,
-                           caption=f"✅ **Downloaded:** {ep_data['ep_title']}\n🌟 **Show:** {ep_data['show_title']}")
-            if t: t.close()
+    status_msg = bot.send_message(chat_id, f"⚡ {len(links)} எபிசோடு டவுன்லோட் ஆகிறது...")
     
-    if os.path.exists(file): os.remove(file)
-    if thumb and os.path.exists(thumb): os.remove(thumb)
-    bot.delete_message(message.chat.id, status.message_id)
+    for idx, link in enumerate(links, start=1):
+        try:
+            bot.edit_message_text(f"⏳ Downloading ({idx}/{len(links)})...", chat_id, status_msg.message_id)
+            
+            ep_data, error = fetch_episode_metadata(link)
+            if error:
+                bot.send_message(chat_id, f"⚠️ Link {idx} Failed: {error}")
+                continue
+                
+            audio_file, thumb_file, err = download_audio_and_thumb(ep_data)
+            if err:
+                bot.send_message(chat_id, f"⚠️ Link {idx} Error: {err}")
+                continue
+                
+            with open(audio_file, 'rb') as audio:
+                if thumb_file and os.path.exists(thumb_file):
+                    with open(thumb_file, 'rb') as thumb:
+                        bot.send_audio(chat_id, audio, title=ep_data['ep_title'], performer=ep_data['show_title'], thumb=thumb)
+                else:
+                    bot.send_audio(chat_id, audio, title=ep_data['ep_title'], performer=ep_data['show_title'])
+                    
+            if audio_file and os.path.exists(audio_file): os.remove(audio_file)
+            if thumb_file and os.path.exists(thumb_file): os.remove(thumb_file)
+            
+        except Exception as e:
+            bot.send_message(chat_id, f"❌ Link {idx} Error: {str(e)}")
+            
+    bot.delete_message(chat_id, status_msg.message_id)
+    bot.send_message(chat_id, "✅ வெற்றிகரமாக அனுப்பி முடிக்கப்பட்டது!")
 
-@bot.message_handler(func=lambda m: "pocketfm.com/show/" in m.text)
-def show_handler(message):
+# ==========================================
+# 8. Show Link & Range Processing
+# ==========================================
+@bot.message_handler(regexp=r"pocketfm\.com/show/")
+def handle_show_link(message):
+    chat_id = message.chat.id
     url = message.text.strip()
-    status = bot.send_message(message.chat.id, "🔍 Fetching Series List...")
+    
+    msg = bot.send_message(chat_id, "🔍 Series விபரங்களைச் சேகரிக்கிறேன்...")
     
     try:
-        res = session.get(url, timeout=10)
-        soup = BeautifulSoup(res.text, 'html.parser')
-        links = soup.find_all('a', href=re.compile(r'/episode/'))
+        match = re.search(r'/show/([a-zA-Z0-9_-]+)', url)
+        if not match:
+            bot.edit_message_text("❌ செல்லுபடியாகாத Show Link.", chat_id, msg.message_id)
+            return
+            
+        show_id = match.group(1).split('?')[0]
         
-        episodes = []
-        seen = set()
-        for l in links:
-            eid = l['href'].split('/')[-1]
-            if eid not in seen:
-                episodes.append(eid)
-                seen.add(eid)
-        
-        if not episodes:
-            bot.edit_message_text("❌ No episodes found. Is the link correct?", message.chat.id, status.message_id)
+        web_resp = session.get(url, timeout=12)
+        series_title = "Pocket FM Series"
+        cover_photo = None
+        episode_data = []
+
+        if web_resp.status_code == 200:
+            soup = BeautifulSoup(web_resp.text, 'html.parser')
+            title_tag = soup.find('meta', property='og:title')
+            image_tag = soup.find('meta', property='og:image')
+            if title_tag: series_title = title_tag['content'].replace('- Listen on Pocket FM', '').strip()
+            if image_tag: cover_photo = image_tag['content']
+            
+            ep_links = soup.find_all('a', href=re.compile(r'/episode/'))
+            seen_ids = set()
+            for a in ep_links:
+                ep_match = re.search(r'/episode/([a-zA-Z0-9_-]+)', a.get('href', ''))
+                if ep_match and ep_match.group(1) not in seen_ids:
+                    seen_ids.add(ep_match.group(1))
+                    episode_data.append({'id': ep_match.group(1), 'title': a.get_text(strip=True)})
+
+        if not episode_data:
+            endpoints = [
+                f"https://api.pocketfm.com/v2/shows/{show_id}",
+                f"https://api.pocketfm.com/v4/shows/{show_id}",
+                f"https://api.pocketfm.com/v3/shows/{show_id}"
+            ]
+            for api_url in endpoints:
+                res = session.get(api_url, timeout=10)
+                if res.status_code == 200:
+                    data = res.json()
+                    series_title = data.get('title', series_title)
+                    episodes = data.get('episodes', [])
+                    episode_data = [{'id': ep['id'], 'title': ep.get('title', f"Episode {i+1}")} for i, ep in enumerate(episodes)]
+                    if episode_data: break
+
+        if not episode_data:
+            bot.edit_message_text("❌ Series Data பெற முடியவில்லை. Cookies-ஐ புதுப்பிக்கவும்.", chat_id, msg.message_id)
             return
 
-        # 🔥 Fix: Store complete state (Title + List + Total)
-        user_states[message.chat.id] = {
-            'list': episodes,
-            'title': soup.title.text,
-            'total': len(episodes)
+        user_states[chat_id] = {
+            'awaiting_range': True,
+            'series_title': series_title,
+            'episode_data': episode_data,
+            'total': len(episode_data)
         }
-        bot.send_message(message.chat.id, f"🎧 **Found {len(episodes)} Episodes.**\n\nSend the range you want to download:\nExample: `1 10` (for first 10 episodes)")
+        
+        reply_text = (
+            f"🎧 **Series Selected:** {series_title}\n"
+            f"📊 **Total Episodes:** {len(episode_data)}\n\n"
+            f"💬 **எபிசோடு எண்களை அனுப்பவும்:**\nSingle: `1`\nRange: `1 15`"
+        )
+        
+        bot.delete_message(chat_id, msg.message_id)
+        if cover_photo:
+            bot.send_photo(chat_id, cover_photo, caption=reply_text, parse_mode="Markdown")
+        else:
+            bot.send_message(chat_id, reply_text, parse_mode="Markdown")
+            
     except Exception as e:
-        bot.send_message(message.chat.id, f"❌ Show Error: {e}")
-
-@bot.message_handler(func=lambda m: m.chat.id in user_states and re.match(r'^\d+\s*\d*$', m.text))
-def batch_download(message):
-    data = user_states.get(message.chat.id)
-    nums = [int(x) for x in message.text.split()]
-    start = nums[0]
-    end = nums[1] if len(nums) > 1 else start
-    
-    selected = data['list'][start-1 : end]
-    status = bot.send_message(message.chat.id, f"🚀 Preparing Batch {start} to {end}...")
-
-    for i, eid in enumerate(selected, 1):
-        bot.edit_message_text(f"⏳ **Batch Progress:** {i}/{len(selected)}", message.chat.id, status.message_id)
-        ep_data, _ = fetch_metadata(eid)
-        if ep_data:
-            file, thumb, _ = download_audio(ep_data, message.chat.id, status.message_id)
-            if file:
-                with open(file, 'rb') as f:
-                    t = open(thumb, 'rb') if thumb else None
-                    bot.send_audio(message.chat.id, f, title=ep_data['ep_title'], performer=ep_data['show_title'], thumb=t)
-                    if t: t.close()
-                os.remove(file)
-                if thumb: os.remove(thumb)
-    
-    bot.send_message(message.chat.id, "✅ Batch Download Finished!")
-    del user_states[message.chat.id]
+        bot.send_message(chat_id, f"❌ Error: {str(e)}")
 
 # ==========================================
-# 8. Start Bot
+# 9. Catch Range Numbers
 # ==========================================
-print("🚀 Ultimate Bot Started!")
+@bot.message_handler(func=lambda msg: user_states.get(msg.chat.id, {}).get('awaiting_range', False))
+def process_range_text(message):
+    chat_id = message.chat.id
+    text = message.text.strip()
+    data = user_states.get(chat_id)
+    
+    total_eps = data['total']
+    episode_data = data['episode_data']
+    
+    try:
+        numbers = text.split()
+        if len(numbers) == 1:
+            start_ep = end_ep = int(numbers[0])
+        elif len(numbers) == 2:
+            start_ep, end_ep = int(numbers[0]), int(numbers[1])
+        else:
+            bot.send_message(chat_id, "❌ தவறான வடிவம். எ.கா: `1` அல்லது `1 15`")
+            return
+            
+        start_ep = max(1, start_ep)
+        end_ep = min(total_eps, end_ep)
+        
+        total_to_download = (end_ep - start_ep) + 1
+        prog_msg = bot.send_message(chat_id, f"⏳ 0/{total_to_download} டவுன்லோட் ஆகிறது...")
+        selected_episodes = episode_data[start_ep-1:end_ep]
+        
+        for i, ep in enumerate(selected_episodes, start=1):
+            bot.edit_message_text(f"⚡ Downloading {i}/{total_to_download}: Ep {start_ep + i - 1}", chat_id, prog_msg.message_id)
+            
+            ep_data, error = fetch_episode_metadata(str(ep['id']))
+            if error:
+                bot.send_message(chat_id, f"⚠️ Ep {start_ep + i - 1} Failed: {error}")
+                continue
+                
+            audio_file, thumb_file, err = download_audio_and_thumb(ep_data)
+            if err:
+                bot.send_message(chat_id, f"⚠️ Ep {start_ep + i - 1} Error: {err}")
+                continue
+                
+            title_to_send = ep_data['ep_title'] if ep_data['ep_title'] else f"Ep {start_ep + i - 1} - {ep['title']}"
+            performer_to_send = ep_data['show_title'] if ep_data['show_title'] else data['series_title']
+            
+            with open(audio_file, 'rb') as audio:
+                if thumb_file and os.path.exists(thumb_file):
+                    with open(thumb_file, 'rb') as thumb:
+                        bot.send_audio(chat_id, audio, title=title_to_send, performer=performer_to_send, thumb=thumb)
+                else:
+                    bot.send_audio(chat_id, audio, title=title_to_send, performer=performer_to_send)
+                    
+            if audio_file and os.path.exists(audio_file): os.remove(audio_file)
+            if thumb_file and os.path.exists(thumb_file): os.remove(thumb_file)
+                
+        user_states[chat_id]['awaiting_range'] = False
+        bot.edit_message_text("✅ அனைத்து எபிசோடுகளும் வெற்றிகரமாக அனுப்பப்பட்டன!", chat_id, prog_msg.message_id)
+        
+    except ValueError:
+        bot.send_message(chat_id, "❌ எண்களை மட்டும் அனுப்பவும்.")
+
+# ==========================================
+# 10. Menu Handlers
+# ==========================================
+@bot.message_handler(func=lambda message: message.text == "📥 Single/Multi Episode")
+def handle_single_button(message):
+    bot.send_message(message.chat.id, "📥 ஒன்று அல்லது பல `/episode/` லிங்குகளை ஒரே மெசேஜில் அனுப்பவும்.")
+
+@bot.message_handler(func=lambda message: message.text == "🔍 Download Series")
+def handle_series_button(message):
+    bot.send_message(message.chat.id, "🔍 தொடரின் `/show/` லிங்கை அனுப்பவும்.")
+
+@bot.message_handler(func=lambda message: message.text == "🔄 Refresh Cookies")
+def handle_refresh_button(message):
+    bot.send_message(message.chat.id, "🔄 `cookies.txt` ஃபைலை GitHub-ல் அப்டேட் செய்து Redeploy செய்யவும்.")
+
+@bot.message_handler(func=lambda message: message.text == "📊 About & Status")
+def handle_about_button(message):
+    bot.send_message(message.chat.id, "👑 **Ultimate Pocket FM Downloader Bot**\n\n⚡ Old Working Engine + Auto Guest Token\n⚡ Ultra-Fast FFmpeg Engine\n✅ 24/7 Web Server Enabled.")
+
+print("👑 Ultimate Master Bot Engine Started...")
 bot.polling(none_stop=True, skip_pending=True)
