@@ -6,16 +6,17 @@ import subprocess
 import uuid
 import json
 from http.cookiejar import MozillaCookieJar
+from telebot.types import ReplyKeyboardMarkup, KeyboardButton
 
 # ==========================================
-# 🔥 1. Environment Variables (Render-ல் இவற்றைச் சேர்க்கவும்)
+# 🔥 1. Environment Variables
 # ==========================================
 BOT_TOKEN = os.getenv("TELEGRAM_TOKEN")
 if not BOT_TOKEN:
-    raise ValueError("TELEGRAM_TOKEN கண்டிப்பாக Environment Variables-ல் இருக்க வேண்டும்!")
+    raise ValueError("TELEGRAM_TOKEN கண்டிப்பாக இருக்க வேண்டும்!")
 
 # ==========================================
-# 🍪 2. Cookie Session Loader (இதுதான் 403/404-ஐ சரி செய்யும்!)
+# 🍪 2. Cookie Loader (403 & 404-ஐ சரி செய்யும்)
 # ==========================================
 session = requests.Session()
 COOKIE_FILE = 'cookies.txt'
@@ -25,45 +26,66 @@ if os.path.exists(COOKIE_FILE):
         cj = MozillaCookieJar(COOKIE_FILE)
         cj.load()
         session.cookies = cj
-        print("✅ cookies.txt loaded successfully! No more 403/404 errors!")
+        print("✅ cookies.txt Loaded!")
     except Exception as e:
-        print(f"⚠️ cookies.txt load error: {e}")
-else:
-    print("⚠️ cookies.txt file not found. Place it in the root folder.")
+        print(f"⚠️ Error: {e}")
 
 # ==========================================
 # 🤖 3. Bot Setup
 # ==========================================
 bot = telebot.TeleBot(BOT_TOKEN)
-user_states = {}  # பயனர் தரவுகளை தற்காலிகமாக சேமிக்க
+user_states = {}
 
 # ==========================================
-# 🎬 4. Series API (v3)
+# ✅ 4. Main Menu Buttons
+# ==========================================
+def get_main_menu():
+    markup = ReplyKeyboardMarkup(resize_keyboard=True, one_time_keyboard=False)
+    markup.add(KeyboardButton("🔍 Download Series"), KeyboardButton("📥 Multi-Link"))
+    markup.add(KeyboardButton("🔄 Refresh Cookies"), KeyboardButton("📊 About"))
+    return markup
+
+@bot.message_handler(commands=['start', 'menu'])
+def send_welcome(message):
+    bot.send_message(
+        message.chat.id,
+        "👋 **Welcome to World Best Downloader Bot!**\n\n"
+        "🔹 **Download Series:** Send a `/show/` link.\n"
+        "🔹 **Multi-Link:** Send multiple `/episode/` links in one message.\n"
+        "🔹 **Refresh Cookies:** Upload new `cookies.txt` via Render Secret Files.\n\n"
+        "👇 Choose an option below:",
+        reply_markup=get_main_menu(),
+        parse_mode="Markdown"
+    )
+
+# ==========================================
+# 🎬 5. Series API (Hybrid - Try v3/v4)
 # ==========================================
 @bot.message_handler(regexp=r"pocketfm\.com/show/")
 def handle_show_link(message):
     chat_id = message.chat.id
     url = message.text.strip()
     
-    bot.reply_to(message, "🔍 Cookie மூலம் Series விவரங்களைப் பெறுகிறேன்...")
+    msg = bot.send_message(chat_id, "🔍 Fetching Series details...")
     
     try:
         match = re.search(r'/show/([a-zA-Z0-9_-]+)', url)
         if not match:
-            bot.send_message(chat_id, "❌ தவறான Show லிங்க்.")
+            bot.edit_message_text("❌ Invalid Show link.", chat_id, msg.message_id)
             return
             
         show_id = match.group(1).split('?')[0]
         
-        # 🔥 v3 Series API
+        # 🔥 Try v3 first, then v4 if v3 fails
         api_url = f"https://api.pocketfm.com/v3/shows/{show_id}"
-        resp = session.get(api_url, timeout=30)  # Cookie தானாகவே போகும்
+        resp = session.get(api_url, timeout=30)
         
-        if resp.status_code == 401 or resp.status_code == 403:
-            bot.send_message(chat_id, "❌ Cookies காலாவதியாகிவிட்டது. புதிய cookies.txt-ஐ Kiwi-யில் இருந்து எடுத்து Render-ல் அப்லோட் செய்யவும்.")
-            return
+        if resp.status_code == 404:
+            api_url = f"https://api.pocketfm.com/v4/shows/{show_id}"
+            resp = session.get(api_url, timeout=30)
+            
         if resp.status_code != 200:
-            bot.send_message(chat_id, f"❌ API Error: {resp.status_code}")
+            bot.edit_message_text(f"❌ API Error: {resp.status_code}. Please refresh cookies.", chat_id, msg.message_id)
             return
             
         data = resp.json()
@@ -72,22 +94,22 @@ def handle_show_link(message):
         episode_data = [{'id': ep['id'], 'title': ep.get('title', f"Episode {i+1}")} for i, ep in enumerate(episodes)]
         
         user_states[chat_id] = {'series_title': series_title, 'episode_data': episode_data, 'total': len(episode_data)}
-        reply_text = f"🎧 **Series Selected:** {series_title}\n📊 **Total Episodes:** {len(episode_data)}\n\n💬 *Send track number(s):*\nSingle: `7`\nRange: `21 125`"
-        msg = bot.send_message(chat_id, reply_text, parse_mode="Markdown")
-        bot.register_next_step_handler(msg, process_episode_range)
+        reply_text = f"🎧 **Series Selected:** {series_title}\n📊 **Total Episodes:** {len(episode_data)}\n\n💬 *Send track numbers:*\nSingle: `7`\nRange: `21 125`"
+        bot.edit_message_text(reply_text, chat_id, msg.message_id, parse_mode="Markdown")
+        bot.register_next_step_handler(message, process_episode_range)
         
     except Exception as e:
-        bot.send_message(chat_id, f"❌ பிழை: {str(e)}")
+        bot.edit_message_text(f"❌ Error: {str(e)}", chat_id, msg.message_id)
 
 # ==========================================
-# 📊 5. Episode Range (Batch & Single)
+# 📊 6. Episode Processor
 # ==========================================
 def process_episode_range(message):
     chat_id = message.chat.id
     text = message.text.strip()
     
     if chat_id not in user_states:
-        bot.send_message(chat_id, "❌ Session முடிந்தது. மீண்டும் Show லிங்கை அனுப்பவும்.")
+        bot.send_message(chat_id, "❌ Session expired. Send the Show link again.")
         return
         
     data = user_states[chat_id]
@@ -101,7 +123,7 @@ def process_episode_range(message):
         elif len(numbers) == 2:
             start_ep, end_ep = int(numbers[0]), int(numbers[1])
         else:
-            msg = bot.send_message(chat_id, "❌ தவறான வடிவம். `7` அல்லது `1 15`")
+            msg = bot.send_message(chat_id, "❌ Invalid format. Use `7` or `1 15`")
             bot.register_next_step_handler(msg, process_episode_range)
             return
             
@@ -127,18 +149,17 @@ def process_episode_range(message):
                     os.remove(audio_file)
                     
         del user_states[chat_id]
-        bot.send_message(chat_id, "✅ முடிந்தது!")
+        bot.send_message(chat_id, "✅ All done!")
         
     except ValueError:
-        msg = bot.send_message(chat_id, "❌ எண்களை மட்டும் அனுப்பவும்.")
+        msg = bot.send_message(chat_id, "❌ Send numbers only.")
         bot.register_next_step_handler(msg, process_episode_range)
 
 # ==========================================
-# 🎵 6. Audio Downloader (v2)
+# 🎵 7. Audio Downloader
 # ==========================================
 def download_episode_audio(episode_id):
     try:
-        # 🔥 Episode-க்கு v2 API
         api_url = f"https://api.pocketfm.com/v2/episodes/{episode_id}"
         resp = session.get(api_url, timeout=20)
         
@@ -152,7 +173,7 @@ def download_episode_audio(episode_id):
             if playback:
                 stream_url = playback.get('url')
         if not stream_url:
-            return None, "M3U8 ஸ்ட்ரீம் URL கிடைக்கவில்லை."
+            return None, "M3U8 URL not found."
             
         if not os.path.exists('downloads'): os.makedirs('downloads')
         unique_name = str(uuid.uuid4())[:8]
@@ -161,23 +182,30 @@ def download_episode_audio(episode_id):
         return output_file, None
         
     except subprocess.CalledProcessError:
-        return None, "FFmpeg conversion failed."
+        return None, "FFmpeg failed."
     except Exception as e:
         return None, str(e)
 
 # ==========================================
-# 🚀 7. Start Command & Polling
+# 🧹 8. Multi-Link & Button Handlers
 # ==========================================
-@bot.message_handler(commands=['start'])
-def send_welcome(message):
-    bot.reply_to(
-        message,
-        "👋 **வணக்கம்!** இது Cookies-Based Ultimate Pocket FM Bot.\n\n"
-        "✅ Single Episode, Batch Download, Range Download எல்லாம் 100% வேலை செய்யும்!\n\n"
-        "⚠️ `cookies.txt` காலாவதியானால், Kiwi Browser-ல் இருந்து புதியதை எடுத்து Render-ல் அப்லோட் செய்யவும்."
-    )
+@bot.message_handler(func=lambda message: message.text == "📥 Multi-Link")
+def handle_multilink_button(message):
+    bot.send_message(message.chat.id, "📥 Please send multiple `/episode/` links in one message, separated by new lines.")
 
-print("🤖 Ultimate Cookie-Based Bot Started...")
+@bot.message_handler(func=lambda message: message.text == "🔄 Refresh Cookies")
+def handle_refresh_button(message):
+    bot.send_message(message.chat.id, "🔄 To refresh cookies, upload a new `cookies.txt` file in Render Dashboard -> Environment -> Secret Files -> `+ Add file` and Redeploy.")
 
-# 🔥 409 Conflict பிரச்சனையைச் சரி செய்யும் வரி
+@bot.message_handler(func=lambda message: message.text == "📊 About")
+def handle_about_button(message):
+    bot.send_message(message.chat.id, "🤖 **World Best Downloader Bot**\n\n✅ Uses `cookies.txt` for 403/404 bypass.\n✅ Supports Single, Batch, & Range Downloads.\n✅ Built with PyTelegramBotAPI & FFmpeg.\n\n📍 To upload `cookies.txt`, go to Render Dashboard → Environment → Secret Files.")
+
+@bot.message_handler(func=lambda message: message.text == "🔍 Download Series")
+def handle_series_button(message):
+    bot.send_message(message.chat.id, "🔍 Please send a valid `pocketfm.com/show/...` link to start.")
+
+# ==========================================
+# 🚀 9. Start Polling
+# ==========================================
 bot.polling(none_stop=True, skip_pending=True, interval=0)
