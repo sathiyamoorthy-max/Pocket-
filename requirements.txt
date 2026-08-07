@@ -7,3 +7,4 @@ yt-dlp
 python-dotenv
 pyTelegramBotAPI
 beautifulsoup4
+static-ffmpeg
