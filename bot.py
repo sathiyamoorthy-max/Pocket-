@@ -10,10 +10,6 @@ from flask import Flask
 import telebot
 from telebot.types import ReplyKeyboardMarkup, KeyboardButton
 
-# Auto FFmpeg Setup for Cloud Servers
-import static_ffmpeg
-static_ffmpeg.add_paths()
-
 # ==========================================
 # 1. Environment Variables Setup
 # ==========================================
@@ -43,11 +39,13 @@ threading.Thread(target=run_web_server, daemon=True).start()
 # 3. Session & Cookie Loader
 # ==========================================
 session = requests.Session()
-session.headers.update({
+HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36",
-    "Accept": "application/json, text/plain, */*",
-    "Accept-Language": "en-US,en;q=0.9"
-})
+    "Accept": "*/*",
+    "Accept-Language": "en-US,en;q=0.9",
+    "Referer": "https://www.pocketfm.com/"
+}
+session.headers.update(HEADERS)
 
 COOKIE_FILE = 'cookies.txt'
 if os.path.exists(COOKIE_FILE):
@@ -74,8 +72,8 @@ def send_welcome(message):
         message.chat.id,
         "👑 **Welcome to World Best Pocket FM Downloader Bot!**\n\n"
         "✨ **Features Enabled:**\n"
-        "🟢 Auto FFmpeg Engine (URL & Headers Cleaner)\n"
-        "🟢 Pure Web Scraper + Multi-API Engine\n"
+        "🟢 Cloudfront HTTP 403 Bypass Engine\n"
+        "🟢 Pure Web Scraper + All API Fallbacks (v1 to v4)\n"
         "🖼️ HD Cover Art + Track Title Metadata\n"
         "🎧 Range Download, Multi-Link & Full Series Support\n\n"
         "👇 *Choose an option below:*",
@@ -84,7 +82,7 @@ def send_welcome(message):
     )
 
 # ==========================================
-# 5. Core Multi-Engine (Scraper + API)
+# 5. Core Multi-Engine (Scraper + Ultimate API Endpoints)
 # ==========================================
 def fetch_episode_metadata(episode_id_or_url):
     ep_id = episode_id_or_url.split('/')[-1].split('?')[0]
@@ -116,9 +114,11 @@ def fetch_episode_metadata(episode_id_or_url):
     except Exception as e:
         print(f"Web Scraper Warning: {e}")
 
-    # 2. API Fallback (v2, v3, v4)
+    # 2. All Working Pocket FM API Endpoints (Old + New Fallbacks)
     endpoints = [
         f"https://api.pocketfm.com/v2/episodes/{ep_id}",
+        f"https://api.pocketfm.com/api/v1/episode/{ep_id}",
+        f"https://api.pocketfm.com/api/v2/episode/{ep_id}",
         f"https://api.pocketfm.com/v3/episodes/{ep_id}",
         f"https://api.pocketfm.com/v4/episodes/{ep_id}"
     ]
@@ -163,8 +163,8 @@ def download_audio_and_thumb(ep_data):
         audio_file = f"downloads/{unique_id}.mp3"
         thumb_file = f"downloads/{unique_id}.jpg" if ep_data.get('thumb_url') else None
         
-        # 🔥 FIX 1: Clean trailing slash / backslash from URL
-        clean_stream_url = ep_data['stream_url'].rstrip('\\/').strip()
+        # Clean URL
+        clean_stream_url = ep_data['stream_url'].replace('\\', '').rstrip('/').strip()
         
         # Download Cover Image
         if ep_data.get('thumb_url'):
@@ -175,23 +175,30 @@ def download_audio_and_thumb(ep_data):
             except Exception:
                 thumb_file = None
                 
-        # 🔥 FIX 2: Standard user-agent flag for FFmpeg (Bypasses Exit Status 8)
+        # Advanced Stream Downloader via yt-dlp
         cmd = [
-            'ffmpeg', '-y',
-            '-user_agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-            '-i', clean_stream_url,
-            '-c', 'copy',
-            '-bsf:a', 'aac_adtstoasc',
-            audio_file
+            'yt-dlp',
+            '--no-check-certificates',
+            '--user-agent', HEADERS['User-Agent'],
+            '--referer', HEADERS['Referer'],
+            '-o', audio_file,
+            clean_stream_url
         ]
         
-        subprocess.run(cmd, check=True, capture_output=True)
+        subprocess.run(cmd, capture_output=True)
+        
+        # Fallback to direct request download if yt-dlp fails
+        if not os.path.exists(audio_file) or os.path.getsize(audio_file) == 0:
+            resp = session.get(clean_stream_url, stream=True, timeout=20)
+            if resp.status_code == 200:
+                with open(audio_file, 'wb') as f:
+                    for chunk in resp.iter_content(chunk_size=1024*1024):
+                        if chunk: f.write(chunk)
+            else:
+                return None, None, f"Stream Download Error: {resp.status_code}"
+
         return audio_file, thumb_file, None
         
-    except subprocess.CalledProcessError as e:
-        error_logs = e.stderr.decode('utf-8') if e.stderr else str(e)
-        print(f"FFmpeg Error Log: {error_logs}")
-        return None, None, f"FFmpeg Error: Stream-ஐ மாற்றுவதில் சிக்கல்."
     except Exception as e:
         return None, None, str(e)
 
@@ -256,7 +263,8 @@ def handle_show_link(message):
         
         endpoints = [
             f"https://api.pocketfm.com/v3/shows/{show_id}",
-            f"https://api.pocketfm.com/v4/shows/{show_id}"
+            f"https://api.pocketfm.com/v4/shows/{show_id}",
+            f"https://api.pocketfm.com/api/v1/show/{show_id}"
         ]
         
         data = None
@@ -365,7 +373,7 @@ def handle_refresh_button(message):
 
 @bot.message_handler(func=lambda message: message.text == "📊 About & Status")
 def handle_about_button(message):
-    bot.send_message(message.chat.id, "👑 **World Best Pocket FM Downloader Bot**\n\n✅ FFmpeg Clean Engine\n✅ Web Scraper + API Engine\n✅ HD Cover Art & Track Title\n✅ 24/7 Web Server Enabled.")
+    bot.send_message(message.chat.id, "👑 **World Best Pocket FM Downloader Bot**\n\n✅ Cloudfront Bypass Engine\n✅ Web Scraper + All API Fallbacks\n✅ HD Cover Art & Track Title\n✅ 24/7 Web Server Enabled.")
 
 # ==========================================
 # 10. Start Polling
