@@ -6,3 +6,5 @@ pycryptodome
 Pillow
 yt-dlp
 python-dotenv
+pyTelegramBotAPI
+requests
