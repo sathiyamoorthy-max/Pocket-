@@ -21,7 +21,7 @@ bot = telebot.TeleBot(BOT_TOKEN)
 user_states = {}
 
 # ==========================================
-# 2. Render / Koyeb 24/7 Web Server
+# 2. Render 24/7 Web Server
 # ==========================================
 app = Flask(__name__)
 
@@ -36,16 +36,16 @@ def run_web_server():
 threading.Thread(target=run_web_server, daemon=True).start()
 
 # ==========================================
-# 3. Session & Cookie Loader
+# 3. Mobile App Headers Engine (Bypasses HTTP 403 Forbidden)
 # ==========================================
 session = requests.Session()
-HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36",
+MOBILE_HEADERS = {
+    "User-Agent": "PocketFM/6.5.0 (Android; 13; SM-G991B)",
     "Accept": "*/*",
     "Accept-Language": "en-US,en;q=0.9",
     "Referer": "https://www.pocketfm.com/"
 }
-session.headers.update(HEADERS)
+session.headers.update(MOBILE_HEADERS)
 
 COOKIE_FILE = 'cookies.txt'
 if os.path.exists(COOKIE_FILE):
@@ -71,28 +71,26 @@ def send_welcome(message):
     bot.send_message(
         message.chat.id,
         "👑 **Welcome to World Best Pocket FM Downloader Bot!**\n\n"
-        "✨ **Features Enabled:**\n"
+        "✨ **Ultra Features Enabled:**\n"
+        "🟢 Mobile Native API Engine (Fixes 403 Forbidden)\n"
+        "🟢 Full Show Scanner (Language + Total Episodes)\n"
         "🟢 Auto 50MB File Compression (Fixes Error 413)\n"
-        "🟢 Cloudfront HTTP 403 Bypass Engine\n"
-        "🟢 Pure Web Scraper + All API Fallbacks\n"
-        "🖼️ HD Cover Art + Track Title Metadata\n"
-        "🎧 Range Download, Multi-Link & Full Series Support\n\n"
+        "🖼️ HD Cover Art + Track Title Metadata\n\n"
         "👇 *Choose an option below:*",
         reply_markup=get_main_menu(),
         parse_mode="Markdown"
     )
 
 # ==========================================
-# 5. Core Multi-Engine (Scraper + Ultimate API Endpoints)
+# 5. Advanced Episode Fetcher
 # ==========================================
 def fetch_episode_metadata(episode_id_or_url):
     ep_id = episode_id_or_url.split('/')[-1].split('?')[0]
     
-    # 1. Direct Web Scraper
+    # 1. Scraper First
     try:
         web_url = f"https://www.pocketfm.com/episode/{ep_id}" if not episode_id_or_url.startswith("http") else episode_id_or_url
-        web_resp = session.get(web_url, timeout=15)
-        
+        web_resp = session.get(web_url, timeout=12)
         if web_resp.status_code == 200:
             soup = BeautifulSoup(web_resp.text, 'html.parser')
             title_tag = soup.find('meta', property='og:title')
@@ -113,9 +111,9 @@ def fetch_episode_metadata(episode_id_or_url):
                             'thumb_url': thumb_url
                         }, None
     except Exception as e:
-        print(f"Web Scraper Warning: {e}")
+        print(f"Scraper Error: {e}")
 
-    # 2. All Working Pocket FM API Endpoints
+    # 2. Advanced Multi-API Fallback List
     endpoints = [
         f"https://api.pocketfm.com/v2/episodes/{ep_id}",
         f"https://api.pocketfm.com/api/v1/episode/{ep_id}",
@@ -166,7 +164,6 @@ def download_audio_and_thumb(ep_data):
         
         clean_stream_url = ep_data['stream_url'].replace('\\', '').rstrip('/').strip()
         
-        # Download Cover Image
         if ep_data.get('thumb_url'):
             try:
                 img_bytes = session.get(ep_data['thumb_url'], timeout=10).content
@@ -175,19 +172,19 @@ def download_audio_and_thumb(ep_data):
             except Exception:
                 thumb_file = None
                 
-        # Stream Downloader via yt-dlp
+        # Bypass 403 Forbidden using Mobile Headers in yt-dlp
         cmd = [
             'yt-dlp',
             '--no-check-certificates',
-            '--user-agent', HEADERS['User-Agent'],
-            '--referer', HEADERS['Referer'],
+            '--user-agent', MOBILE_HEADERS['User-Agent'],
+            '--referer', MOBILE_HEADERS['Referer'],
             '-o', audio_file,
             clean_stream_url
         ]
         
         subprocess.run(cmd, capture_output=True)
         
-        # Direct Request Fallback
+        # Direct Session Download Fallback
         if not os.path.exists(audio_file) or os.path.getsize(audio_file) == 0:
             resp = session.get(clean_stream_url, stream=True, timeout=20)
             if resp.status_code == 200:
@@ -195,17 +192,14 @@ def download_audio_and_thumb(ep_data):
                     for chunk in resp.iter_content(chunk_size=1024*1024):
                         if chunk: f.write(chunk)
             else:
-                return None, None, f"Stream Download Error: {resp.status_code}"
+                return None, None, f"HTTP Error {resp.status_code}: Forbidden / Blocked"
 
-        # 🚀 AUTO COMPRESSION FOR 50MB TELEGRAM LIMIT (Fixes Error 413)
+        # Auto Compress for 50MB Limit
         if os.path.exists(audio_file):
             file_size_mb = os.path.getsize(audio_file) / (1024 * 1024)
             if file_size_mb >= 49.0:
                 compressed_file = f"downloads/compressed_{unique_id}.mp3"
-                compress_cmd = [
-                    'ffmpeg', '-y', '-i', audio_file,
-                    '-b:a', '64k', compressed_file
-                ]
+                compress_cmd = ['ffmpeg', '-y', '-i', audio_file, '-b:a', '64k', compressed_file]
                 subprocess.run(compress_cmd, capture_output=True)
                 if os.path.exists(compressed_file):
                     os.remove(audio_file)
@@ -258,7 +252,7 @@ def handle_single_or_multi_episodes(message):
     bot.send_message(chat_id, "✅ வெற்றிகரமாக அனுப்பி முடிக்கப்பட்டது!")
 
 # ==========================================
-# 7. Full Series (/show/) Handler
+# 7. Advanced Series Handler (Shows Language, Total Episodes & Photo)
 # ==========================================
 @bot.message_handler(regexp=r"pocketfm\.com/show/")
 def handle_show_link(message):
@@ -275,34 +269,76 @@ def handle_show_link(message):
             
         show_id = match.group(1).split('?')[0]
         
+        # New API Endpoints List
         endpoints = [
-            f"https://api.pocketfm.com/v3/shows/{show_id}",
+            f"https://api.pocketfm.com/v2/shows/{show_id}",
             f"https://api.pocketfm.com/v4/shows/{show_id}",
-            f"https://api.pocketfm.com/api/v1/show/{show_id}"
+            f"https://api.pocketfm.com/api/v1/shows/{show_id}",
+            f"https://api.pocketfm.com/v3/shows/{show_id}"
         ]
         
         data = None
         for api_url in endpoints:
-            res = session.get(api_url, timeout=15)
+            res = session.get(api_url, timeout=10)
             if res.status_code == 200:
                 data = res.json()
-                break
+                if data.get('episodes') or data.get('title'):
+                    break
                 
-        if not data:
+        series_title = "Pocket FM Series"
+        language = "Tamil / Hindi / English"
+        cover_photo = None
+        episode_data = []
+
+        if data:
+            series_title = data.get('title', series_title)
+            language = data.get('language', language)
+            cover_photo = data.get('coverUrl') or data.get('imageUrl')
+            episodes = data.get('episodes', [])
+            episode_data = [{'id': ep['id'], 'title': ep.get('title', f"Episode {i+1}")} for i, ep in enumerate(episodes)]
+
+        # Scraper Fallback if API fails to list episodes
+        if not episode_data:
+            web_resp = session.get(url, timeout=12)
+            if web_resp.status_code == 200:
+                soup = BeautifulSoup(web_resp.text, 'html.parser')
+                title_tag = soup.find('meta', property='og:title')
+                image_tag = soup.find('meta', property='og:image')
+                if title_tag: series_title = title_tag['content'].replace('- Listen on Pocket FM', '').strip()
+                if image_tag: cover_photo = image_tag['content']
+                
+                ep_links = soup.find_all('a', href=re.compile(r'/episode/'))
+                seen_ids = set()
+                for a in ep_links:
+                    ep_match = re.search(r'/episode/([a-zA-Z0-9_-]+)', a.get('href', ''))
+                    if ep_match and ep_match.group(1) not in seen_ids:
+                        seen_ids.add(ep_match.group(1))
+                        episode_data.append({'id': ep_match.group(1), 'title': a.get_text(strip=True)})
+
+        if not episode_data:
             bot.edit_message_text("❌ Series Data பெற முடியவில்லை. Cookies-ஐ புதுப்பிக்கவும்.", chat_id, msg.message_id)
             return
-            
-        series_title = data.get('title', 'Pocket FM Series')
-        episodes = data.get('episodes', [])
-        episode_data = [{'id': ep['id'], 'title': ep.get('title', f"Episode {i+1}")} for i, ep in enumerate(episodes)]
-        
+
         user_states[chat_id] = {'series_title': series_title, 'episode_data': episode_data, 'total': len(episode_data)}
-        reply_text = f"🎧 **Series Name:** {series_title}\n📊 **Total Episodes:** {len(episode_data)}\n\n💬 **எபிசோடு எண்களை அனுப்பவும்:**\nSingle: `7`\nRange: `1 15`"
-        bot.edit_message_text(reply_text, chat_id, msg.message_id, parse_mode="Markdown")
-        bot.register_next_step_handler(message, process_episode_range)
+        
+        reply_text = (
+            f"🎧 **Series Selected:** {series_title}\n"
+            f"🌏 **Language:** {language}\n"
+            f"📊 **Total Episodes:** {len(episode_data)}\n\n"
+            f"💬 *Send the track number(s) you wish to fetch.*\n"
+            f"Single: `7`\nRange: `1 15`"
+        )
+        
+        bot.delete_message(chat_id, msg.message_id)
+        if cover_photo:
+            bot.send_photo(chat_id, cover_photo, caption=reply_text, parse_mode="Markdown")
+        else:
+            bot.send_message(chat_id, reply_text, parse_mode="Markdown")
+            
+        bot.register_next_step_handler_by_chat_id(chat_id, process_episode_range)
         
     except Exception as e:
-        bot.edit_message_text(f"❌ Error: {str(e)}", chat_id, msg.message_id)
+        bot.send_message(chat_id, f"❌ Error: {str(e)}")
 
 # ==========================================
 # 8. Series Episode Range Processor
@@ -387,10 +423,7 @@ def handle_refresh_button(message):
 
 @bot.message_handler(func=lambda message: message.text == "📊 About & Status")
 def handle_about_button(message):
-    bot.send_message(message.chat.id, "👑 **World Best Pocket FM Downloader Bot**\n\n✅ Auto 50MB File Compression\n✅ Cloudfront Bypass Engine\n✅ Web Scraper + All API Fallbacks\n✅ HD Cover Art & Track Title\n✅ 24/7 Web Server Enabled.")
+    bot.send_message(message.chat.id, "👑 **World Best Pocket FM Downloader Bot**\n\n✅ Mobile Native API Engine\n✅ 403 Forbidden Auto Bypass\n✅ Full Series Photo & Total Episode Scanner\n✅ Auto 50MB Compression.")
 
-# ==========================================
-# 10. Start Polling
-# ==========================================
-print("👑 Master Bot Engine Started...")
+print("👑 Advanced Master Bot Engine Started...")
 bot.polling(none_stop=True, skip_pending=True)
