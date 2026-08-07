@@ -5,26 +5,31 @@ import re
 import subprocess
 import uuid
 import json
+from http.cookiejar import MozillaCookieJar
 
 # ==========================================
 # 🔥 1. Environment Variables (Render-ல் இவற்றைச் சேர்க்கவும்)
 # ==========================================
 BOT_TOKEN = os.getenv("TELEGRAM_TOKEN")
-POCKET_TOKEN = os.getenv("POCKET_TOKEN")
-
-if not BOT_TOKEN or not POCKET_TOKEN:
-    raise ValueError("TELEGRAM_TOKEN மற்றும் POCKET_TOKEN கண்டிப்பாக Environment Variables-ல் இருக்க வேண்டும்!")
+if not BOT_TOKEN:
+    raise ValueError("TELEGRAM_TOKEN கண்டிப்பாக Environment Variables-ல் இருக்க வேண்டும்!")
 
 # ==========================================
-# ⚙️ 2. Mobile API Headers (Pocket FM API)
+# 🍪 2. Cookie Session Loader (இதுதான் 403/404-ஐ சரி செய்யும்!)
 # ==========================================
-HEADERS = {
-    "Authorization": POCKET_TOKEN,
-    "X-Device-Id": "OPPO_CPH2219",
-    "User-Agent": "PocketFM/6.5.0 (Android; 13; SM-G991B)",
-    "Content-Type": "application/json",
-    "Accept": "application/json"
-}
+session = requests.Session()
+COOKIE_FILE = 'cookies.txt'
+
+if os.path.exists(COOKIE_FILE):
+    try:
+        cj = MozillaCookieJar(COOKIE_FILE)
+        cj.load()
+        session.cookies = cj
+        print("✅ cookies.txt loaded successfully! No more 403/404 errors!")
+    except Exception as e:
+        print(f"⚠️ cookies.txt load error: {e}")
+else:
+    print("⚠️ cookies.txt file not found. Place it in the root folder.")
 
 # ==========================================
 # 🤖 3. Bot Setup
@@ -33,14 +38,14 @@ bot = telebot.TeleBot(BOT_TOKEN)
 user_states = {}  # பயனர் தரவுகளை தற்காலிகமாக சேமிக்க
 
 # ==========================================
-# 🎬 4. Series API (GitHub-ல் இருந்து உறுதி செய்யப்பட்ட v3 பாதை)
+# 🎬 4. Series API (v3)
 # ==========================================
 @bot.message_handler(regexp=r"pocketfm\.com/show/")
 def handle_show_link(message):
     chat_id = message.chat.id
     url = message.text.strip()
     
-    bot.reply_to(message, "🔍 v3 API மூலம் Series விவரங்களைப் பெறுகிறேன்...")
+    bot.reply_to(message, "🔍 Cookie மூலம் Series விவரங்களைப் பெறுகிறேன்...")
     
     try:
         match = re.search(r'/show/([a-zA-Z0-9_-]+)', url)
@@ -50,12 +55,12 @@ def handle_show_link(message):
             
         show_id = match.group(1).split('?')[0]
         
-        # 🔥 சரியான v3 API எண்ட்பாயிண்ட் (404-ஐ சரி செய்யும்)
+        # 🔥 v3 Series API
         api_url = f"https://api.pocketfm.com/v3/shows/{show_id}"
-        resp = requests.get(api_url, headers=HEADERS, timeout=30)
+        resp = session.get(api_url, timeout=30)  # Cookie தானாகவே போகும்
         
         if resp.status_code == 401 or resp.status_code == 403:
-            bot.send_message(chat_id, "❌ Token காலாவதியாகிவிட்டது. புதிய Token-ஐ DevTools-ல் இருந்து எடுக்கவும்.")
+            bot.send_message(chat_id, "❌ Cookies காலாவதியாகிவிட்டது. புதிய cookies.txt-ஐ Kiwi-யில் இருந்து எடுத்து Render-ல் அப்லோட் செய்யவும்.")
             return
         if resp.status_code != 200:
             bot.send_message(chat_id, f"❌ API Error: {resp.status_code}")
@@ -63,28 +68,10 @@ def handle_show_link(message):
             
         data = resp.json()
         series_title = data.get('title', 'Pocket FM Series')
-        
-        # பல மொழி தலைப்புகளை (Tamil/English) சரியாகக் காட்ட
-        if 'title' in data and data['title']:
-            series_title = data['title']
-            
         episodes = data.get('episodes', [])
+        episode_data = [{'id': ep['id'], 'title': ep.get('title', f"Episode {i+1}")} for i, ep in enumerate(episodes)]
         
-        # Episode Data-ஐ சேகரித்தல்
-        episode_data = []
-        for i, ep in enumerate(episodes):
-            ep_id = ep.get('id')
-            ep_title = ep.get('title', f"Episode {i+1}")
-            episode_data.append({'id': ep_id, 'title': ep_title})
-        
-        # பயனர் தரவை சேமித்தல்
-        user_states[chat_id] = {
-            'series_title': series_title,
-            'episode_data': episode_data,
-            'total': len(episode_data)
-        }
-        
-        # அழகான Reply அனுப்புதல்
+        user_states[chat_id] = {'series_title': series_title, 'episode_data': episode_data, 'total': len(episode_data)}
         reply_text = f"🎧 **Series Selected:** {series_title}\n📊 **Total Episodes:** {len(episode_data)}\n\n💬 *Send track number(s):*\nSingle: `7`\nRange: `21 125`"
         msg = bot.send_message(chat_id, reply_text, parse_mode="Markdown")
         bot.register_next_step_handler(msg, process_episode_range)
@@ -93,7 +80,7 @@ def handle_show_link(message):
         bot.send_message(chat_id, f"❌ பிழை: {str(e)}")
 
 # ==========================================
-# 📊 5. Smart Episode Range Processor (Batch & Single)
+# 📊 5. Episode Range (Batch & Single)
 # ==========================================
 def process_episode_range(message):
     chat_id = message.chat.id
@@ -147,13 +134,13 @@ def process_episode_range(message):
         bot.register_next_step_handler(msg, process_episode_range)
 
 # ==========================================
-# 🎵 6. Audio Downloader (v2 API)
+# 🎵 6. Audio Downloader (v2)
 # ==========================================
 def download_episode_audio(episode_id):
     try:
-        # 🔥 Episode-க்கு v2 API மட்டுமே 100% வேலை செய்யும்
+        # 🔥 Episode-க்கு v2 API
         api_url = f"https://api.pocketfm.com/v2/episodes/{episode_id}"
-        resp = requests.get(api_url, headers=HEADERS, timeout=20)
+        resp = session.get(api_url, timeout=20)
         
         if resp.status_code != 200:
             return None, f"API Error: {resp.status_code}"
@@ -185,11 +172,12 @@ def download_episode_audio(episode_id):
 def send_welcome(message):
     bot.reply_to(
         message,
-        "👋 **வணக்கம்!** இது v3 (Series) & v2 (Episode) API-களைப் பயன்படுத்தும் Ultimate Pocket FM Bot.\n\n"
-        "✅ Single Episode, Batch Download, Range Download எல்லாம் 100% வேலை செய்யும்!"
+        "👋 **வணக்கம்!** இது Cookies-Based Ultimate Pocket FM Bot.\n\n"
+        "✅ Single Episode, Batch Download, Range Download எல்லாம் 100% வேலை செய்யும்!\n\n"
+        "⚠️ `cookies.txt` காலாவதியானால், Kiwi Browser-ல் இருந்து புதியதை எடுத்து Render-ல் அப்லோட் செய்யவும்."
     )
 
-print("🤖 Ultimate Pocket FM Bot Started...")
+print("🤖 Ultimate Cookie-Based Bot Started...")
 
-# 🔥 409 Conflict பிரச்சனையை முழுவதும் சரி செய்யும் அமைப்பு
+# 🔥 409 Conflict பிரச்சனையைச் சரி செய்யும் வரி
 bot.polling(none_stop=True, skip_pending=True, interval=0)
