@@ -45,7 +45,8 @@ threading.Thread(target=run_web_server, daemon=True).start()
 session = requests.Session()
 session.headers.update({
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36",
-    "Accept": "application/json, text/plain, */*"
+    "Accept": "application/json, text/plain, */*",
+    "Accept-Language": "en-US,en;q=0.9"
 })
 
 COOKIE_FILE = 'cookies.txt'
@@ -74,7 +75,8 @@ def send_welcome(message):
         "👑 **Welcome to World Best Pocket FM Downloader Bot!**\n\n"
         "✨ **Features Enabled:**\n"
         "🟢 Auto FFmpeg Engine (Static Setup)\n"
-        "🖼️ HD Cover Art + Title Metadata Tagging\n"
+        "🟢 Pure Web Scraper + Multi-API Fallback\n"
+        "🖼️ HD Cover Art + Track Title Metadata\n"
         "🎧 Range Download, Multi-Link & Full Series Support\n\n"
         "👇 *Choose an option below:*",
         reply_markup=get_main_menu(),
@@ -82,11 +84,39 @@ def send_welcome(message):
     )
 
 # ==========================================
-# 5. Core Multi-API Engine
+# 5. Core Multi-Engine (Web Scraper + API)
 # ==========================================
 def fetch_episode_metadata(episode_id_or_url):
     ep_id = episode_id_or_url.split('/')[-1].split('?')[0]
     
+    # 1. Try Web Scraper First (Direct Page Extraction)
+    try:
+        web_url = f"https://www.pocketfm.com/episode/{ep_id}" if not episode_id_or_url.startswith("http") else episode_id_or_url
+        web_resp = session.get(web_url, timeout=15)
+        
+        if web_resp.status_code == 200:
+            soup = BeautifulSoup(web_resp.text, 'html.parser')
+            title_tag = soup.find('meta', property='og:title')
+            image_tag = soup.find('meta', property='og:image')
+            
+            ep_title = title_tag['content'] if title_tag else f"Episode - {ep_id}"
+            thumb_url = image_tag['content'] if image_tag else None
+            
+            script_tags = soup.find_all('script')
+            for script in script_tags:
+                if script.string and ('m3u8' in script.string or 'cloudfront' in script.string or 'mp3' in script.string):
+                    matches = re.findall(r'https?://[^\s"\']+\.(?:m3u8|mp3)[^\s"\']*', script.string)
+                    if matches:
+                        return {
+                            'stream_url': matches[0],
+                            'ep_title': ep_title,
+                            'show_title': "Pocket FM",
+                            'thumb_url': thumb_url
+                        }, None
+    except Exception as e:
+        print(f"Web Scraper Warning: {e}")
+
+    # 2. API Fallback Endpoints (v2, v3, v4)
     endpoints = [
         f"https://api.pocketfm.com/v2/episodes/{ep_id}",
         f"https://api.pocketfm.com/v3/episodes/{ep_id}",
@@ -95,7 +125,7 @@ def fetch_episode_metadata(episode_id_or_url):
     
     for url in endpoints:
         try:
-            resp = session.get(url, timeout=12)
+            resp = session.get(url, timeout=10)
             if resp.status_code == 200:
                 data = resp.json()
                 
@@ -122,7 +152,7 @@ def fetch_episode_metadata(episode_id_or_url):
         except Exception:
             continue
             
-    return None, "Audio stream எடுக்க முடியவில்லை. `cookies.txt` புதுப்பிக்கவும்."
+    return None, "Audio stream எடுக்க முடியவில்லை. இது பிரீமியம் எபிசோடாக இருந்தால், லாகின் செய்யப்பட்ட `cookies.txt` தேவைப்படும்."
 
 def download_audio_and_thumb(ep_data):
     try:
@@ -133,7 +163,6 @@ def download_audio_and_thumb(ep_data):
         audio_file = f"downloads/{unique_id}.mp3"
         thumb_file = f"downloads/{unique_id}.jpg" if ep_data.get('thumb_url') else None
         
-        # Download Thumbnail
         if ep_data.get('thumb_url'):
             try:
                 img_bytes = session.get(ep_data['thumb_url'], timeout=10).content
@@ -328,10 +357,10 @@ def handle_refresh_button(message):
 
 @bot.message_handler(func=lambda message: message.text == "📊 About & Status")
 def handle_about_button(message):
-    bot.send_message(message.chat.id, "👑 **World Best Pocket FM Downloader Bot**\n\n✅ FFmpeg Static Engine\n✅ Cover Art & Track Title\n✅ 24/7 Web Server Enabled.")
+    bot.send_message(message.chat.id, "👑 **World Best Pocket FM Downloader Bot**\n\n✅ FFmpeg Static Engine\n✅ Web Scraper + API Engine\n✅ HD Cover Art & Track Title\n✅ 24/7 Web Server Enabled.")
 
 # ==========================================
 # 10. Start Polling
 # ==========================================
-print("👑 Ultimate Bot Started...")
+print("👑 Ultimate Re-written Bot Started...")
 bot.polling(none_stop=True, skip_pending=True)
